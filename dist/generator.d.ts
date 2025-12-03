@@ -58,6 +58,10 @@ export declare class CodeGenerator {
      */
     private generateBaseTypesFile;
     /**
+     * Рекурсивно собирает все зависимости схемы
+     */
+    private collectAllDependencies;
+    /**
      * Генерирует файл для конкретного тега
      */
     private generateTagFile;

@@ -28,10 +28,17 @@ const translitMap = {
  * @returns Транслитерированный текст
  */
 function transliterate(text) {
-    return text
-        .split('')
-        .map(char => translitMap[char] || char)
-        .join('');
+    let result = '';
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (translitMap.hasOwnProperty(char)) {
+            result += translitMap[char];
+        }
+        else {
+            result += char;
+        }
+    }
+    return result;
 }
 /**
  * Транслитерирует и приводит к camelCase для использования в именах переменных

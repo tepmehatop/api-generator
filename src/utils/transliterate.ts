@@ -26,10 +26,16 @@ const translitMap: Record<string, string> = {
  * @returns Транслитерированный текст
  */
 export function transliterate(text: string): string {
-  return text
-    .split('')
-    .map(char => translitMap[char] || char)
-    .join('');
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (translitMap.hasOwnProperty(char)) {
+      result += translitMap[char];
+    } else {
+      result += char;
+    }
+  }
+  return result;
 }
 
 /**

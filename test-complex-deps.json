@@ -1,0 +1,96 @@
+{
+  "swagger": "2.0",
+  "info": {"title": "Complex Deps Test", "version": "1.0.0"},
+  "host": "api.test.com",
+  "basePath": "/v1",
+  "tags": [
+    {"name": "users", "description": "User operations"},
+    {"name": "orders", "description": "Order operations"}
+  ],
+  "paths": {
+    "/users": {
+      "get": {
+        "tags": ["users"],
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {"$ref": "#/definitions/UserListResponse"}
+          }
+        }
+      }
+    },
+    "/orders": {
+      "get": {
+        "tags": ["orders"],
+        "operationId": "list_orders",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {"$ref": "#/definitions/OrderListResponse"}
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "UserListResponse": {
+      "type": "object",
+      "properties": {
+        "users": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/User"}
+        },
+        "pagination": {"$ref": "#/definitions/PageMetadata"}
+      }
+    },
+    "OrderListResponse": {
+      "type": "object",
+      "properties": {
+        "orders": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/Order"}
+        },
+        "pagination": {"$ref": "#/definitions/PageMetadata"}
+      }
+    },
+    "User": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "name": {"type": "string"},
+        "role": {"$ref": "#/definitions/Role"}
+      }
+    },
+    "Order": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "user": {"$ref": "#/definitions/User"},
+        "status": {"type": "string"}
+      }
+    },
+    "Role": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "name": {"type": "string"}
+      }
+    },
+    "PageMetadata": {
+      "type": "object",
+      "properties": {
+        "page": {"type": "integer"},
+        "total": {"type": "integer"},
+        "sortBy": {"$ref": "#/definitions/SortObject"}
+      }
+    },
+    "SortObject": {
+      "type": "object",
+      "properties": {
+        "field": {"type": "string"},
+        "order": {"type": "string", "enum": ["asc", "desc"]}
+      }
+    }
+  }
+}

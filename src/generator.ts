@@ -313,7 +313,6 @@ export class CodeGenerator {
    * Генерирует файл с базовыми типами
    */
   private generateBaseTypesFile(): GeneratedFile {
-    const imports: string[] = [];
     const types: string[] = [];
     
     types.push('/**');
@@ -321,7 +320,18 @@ export class CodeGenerator {
     types.push(' * Автоматически сгенерировано из OpenAPI спецификации');
     types.push(' */\n');
     
+    // Собираем ВСЕ зависимые схемы для базовых типов рекурсивно
+    const allRequiredSchemas = new Set<string>();
+    
+    // Начинаем с базовых схем
     for (const schemaName of this.baseSchemas) {
+      allRequiredSchemas.add(schemaName);
+      // Рекурсивно добавляем все зависимости
+      this.collectAllDependencies(schemaName, allRequiredSchemas);
+    }
+    
+    // Генерируем все собранные схемы
+    for (const schemaName of allRequiredSchemas) {
       const schema = this.spec.schemas[schemaName];
       if (schema) {
         types.push(this.generateTypeDefinition(schemaName, schema));
@@ -333,6 +343,24 @@ export class CodeGenerator {
       filename: 'base.types.ts',
       content: types.join('\n'),
     };
+  }
+  
+  /**
+   * Рекурсивно собирает все зависимости схемы
+   */
+  private collectAllDependencies(schemaName: string, collected: Set<string>): void {
+    const schema = this.spec.schemas[schemaName];
+    if (!schema) return;
+    
+    const deps = this.extractSchemasDependencies(schema);
+    
+    for (const dep of deps) {
+      if (!collected.has(dep)) {
+        collected.add(dep);
+        // Рекурсивно собираем зависимости этой зависимости
+        this.collectAllDependencies(dep, collected);
+      }
+    }
   }
   
   /**
@@ -402,7 +430,15 @@ export class CodeGenerator {
    * Генерирует класс API для тега
    */
   private generateApiClass(tag: string, operations: PathItem[]): string {
-    const className = toPascalCase(tag) + 'Api';
+    // Транслитерируем русские названия
+    let className = tag;
+    if (this.config.transliterateRussian && /[а-яА-Я]/.test(tag)) {
+      className = transliterate(tag);
+    }
+    
+    // Преобразуем в PascalCase и добавляем Api
+    className = toPascalCase(className) + 'Api';
+    
     const lines: string[] = [];
     
     lines.push('/**');
@@ -420,7 +456,15 @@ export class CodeGenerator {
     lines.push('}');
     lines.push('');
     lines.push(`// Экспортируем синглтон инстанс`);
-    lines.push(`export const ${toCamelCase(tag)}Api = new ${className}();`);
+    
+    // Имя инстанса тоже транслитерируем
+    let instanceName = tag;
+    if (this.config.transliterateRussian && /[а-яА-Я]/.test(tag)) {
+      instanceName = transliterate(tag);
+    }
+    instanceName = toCamelCase(instanceName) + 'Api';
+    
+    lines.push(`export const ${instanceName} = new ${className}();`);
     
     return lines.join('\n');
   }
@@ -447,7 +491,8 @@ export class CodeGenerator {
       lines.push(`   * @tags ${operation.tags.join(', ')}`);
     }
     
-    lines.push(`   * @name ${operation.operationId}`);
+    // @name - используем имя функции (camelCase)
+    lines.push(`   * @name ${funcName}`);
     lines.push(`   * @request ${operation.method}:${operation.path}`);
     
     const hasAuth = this.spec.paths.some(p => 
@@ -726,8 +771,8 @@ export class CodeGenerator {
       lines.push(` * @tags ${operation.tags.join(', ')}`);
     }
     
-    // @name
-    lines.push(` * @name ${operation.operationId}`);
+    // @name - используем имя функции (camelCase), а не operationId
+    lines.push(` * @name ${funcName}`);
     
     // @request
     lines.push(` * @request ${operation.method}:${operation.path}`);

@@ -252,13 +252,21 @@ class CodeGenerator {
      * Генерирует файл с базовыми типами
      */
     generateBaseTypesFile() {
-        const imports = [];
         const types = [];
         types.push('/**');
         types.push(' * Базовые типы, используемые в нескольких модулях');
         types.push(' * Автоматически сгенерировано из OpenAPI спецификации');
         types.push(' */\n');
+        // Собираем ВСЕ зависимые схемы для базовых типов рекурсивно
+        const allRequiredSchemas = new Set();
+        // Начинаем с базовых схем
         for (const schemaName of this.baseSchemas) {
+            allRequiredSchemas.add(schemaName);
+            // Рекурсивно добавляем все зависимости
+            this.collectAllDependencies(schemaName, allRequiredSchemas);
+        }
+        // Генерируем все собранные схемы
+        for (const schemaName of allRequiredSchemas) {
             const schema = this.spec.schemas[schemaName];
             if (schema) {
                 types.push(this.generateTypeDefinition(schemaName, schema));
@@ -269,6 +277,22 @@ class CodeGenerator {
             filename: 'base.types.ts',
             content: types.join('\n'),
         };
+    }
+    /**
+     * Рекурсивно собирает все зависимости схемы
+     */
+    collectAllDependencies(schemaName, collected) {
+        const schema = this.spec.schemas[schemaName];
+        if (!schema)
+            return;
+        const deps = this.extractSchemasDependencies(schema);
+        for (const dep of deps) {
+            if (!collected.has(dep)) {
+                collected.add(dep);
+                // Рекурсивно собираем зависимости этой зависимости
+                this.collectAllDependencies(dep, collected);
+            }
+        }
     }
     /**
      * Генерирует файл для конкретного тега
@@ -328,7 +352,13 @@ class CodeGenerator {
      * Генерирует класс API для тега
      */
     generateApiClass(tag, operations) {
-        const className = (0, string_helpers_1.toPascalCase)(tag) + 'Api';
+        // Транслитерируем русские названия
+        let className = tag;
+        if (this.config.transliterateRussian && /[а-яА-Я]/.test(tag)) {
+            className = (0, transliterate_1.transliterate)(tag);
+        }
+        // Преобразуем в PascalCase и добавляем Api
+        className = (0, string_helpers_1.toPascalCase)(className) + 'Api';
         const lines = [];
         lines.push('/**');
         lines.push(` * API класс для: ${tag}`);
@@ -343,7 +373,13 @@ class CodeGenerator {
         lines.push('}');
         lines.push('');
         lines.push(`// Экспортируем синглтон инстанс`);
-        lines.push(`export const ${(0, string_helpers_1.toCamelCase)(tag)}Api = new ${className}();`);
+        // Имя инстанса тоже транслитерируем
+        let instanceName = tag;
+        if (this.config.transliterateRussian && /[а-яА-Я]/.test(tag)) {
+            instanceName = (0, transliterate_1.transliterate)(tag);
+        }
+        instanceName = (0, string_helpers_1.toCamelCase)(instanceName) + 'Api';
+        lines.push(`export const ${instanceName} = new ${className}();`);
         return lines.join('\n');
     }
     /**
@@ -364,7 +400,8 @@ class CodeGenerator {
         if (operation.tags && operation.tags.length > 0) {
             lines.push(`   * @tags ${operation.tags.join(', ')}`);
         }
-        lines.push(`   * @name ${operation.operationId}`);
+        // @name - используем имя функции (camelCase)
+        lines.push(`   * @name ${funcName}`);
         lines.push(`   * @request ${operation.method}:${operation.path}`);
         const hasAuth = this.spec.paths.some(p => p.operationId === operation.operationId &&
             this.hasSecurityInSpec(p));
@@ -590,8 +627,8 @@ class CodeGenerator {
         if (operation.tags && operation.tags.length > 0) {
             lines.push(` * @tags ${operation.tags.join(', ')}`);
         }
-        // @name
-        lines.push(` * @name ${operation.operationId}`);
+        // @name - используем имя функции (camelCase), а не operationId
+        lines.push(` * @name ${funcName}`);
         // @request
         lines.push(` * @request ${operation.method}:${operation.path}`);
         // @secure (если есть security)

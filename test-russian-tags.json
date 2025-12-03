@@ -1,0 +1,58 @@
+{
+  "swagger": "2.0",
+  "info": {"title": "Russian Tags Test", "version": "1.0.0"},
+  "host": "api.test.com",
+  "basePath": "/v1",
+  "tags": [
+    {"name": "Пользователи", "description": "User operations"},
+    {"name": "Заказы", "description": "Order operations"}
+  ],
+  "paths": {
+    "/users": {
+      "get": {
+        "tags": ["Пользователи"],
+        "operationId": "getUsers",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "array",
+              "items": {"$ref": "#/definitions/User"}
+            }
+          }
+        }
+      }
+    },
+    "/orders": {
+      "get": {
+        "tags": ["Заказы"],
+        "operationId": "getOrders",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "array",
+              "items": {"$ref": "#/definitions/Order"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "User": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "name": {"type": "string"}
+      }
+    },
+    "Order": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "userId": {"type": "integer"}
+      }
+    }
+  }
+}
