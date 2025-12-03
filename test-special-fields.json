@@ -1,0 +1,52 @@
+{
+  "swagger": "2.0",
+  "info": {"title": "Test Special Fields", "version": "1.0.0"},
+  "host": "api.test.com",
+  "basePath": "/v1",
+  "tags": [{"name": "test"}],
+  "paths": {
+    "/items": {
+      "get": {
+        "tags": ["test"],
+        "operationId": "getItems",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "schema": {
+              "type": "array",
+              "items": {"$ref": "#/definitions/Item"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "Item": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "@id": {"type": "string", "description": "JSON-LD identifier"},
+        "@type": {"type": "string"},
+        "name": {"type": "string"},
+        "meta-data": {"type": "string"},
+        "pagination": {"$ref": "#/definitions/PageMetadata"}
+      }
+    },
+    "PageMetadata": {
+      "type": "object",
+      "properties": {
+        "page": {"type": "integer"},
+        "total": {"type": "integer"},
+        "sortBy": {"$ref": "#/definitions/SortObject"}
+      }
+    },
+    "SortObject": {
+      "type": "object",
+      "properties": {
+        "field": {"type": "string"},
+        "order": {"type": "string", "enum": ["asc", "desc"]}
+      }
+    }
+  }
+}

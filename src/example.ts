@@ -8,19 +8,19 @@ async function example() {
   try {
     console.log('=== Пример генерации API клиента ===\n');
     
-    // Пример: Генерация из локального файла (Swagger 2.0)
+    // Пример: Генерация из Petstore (Swagger 2.0)
     await generateApi({
-      specUrl: path.join(__dirname, '../test-swagger.json'),
-      outputDir: path.join(__dirname, '../generated/test-api'),
+      specUrl: path.join(__dirname, '../petstore-local.json'),
+      outputDir: path.join(__dirname, '../generated/petstore'),
       httpClient: 'axios',
-      baseUrl: 'https://api.example.com/v1',
+      baseUrl: 'https://petstore.swagger.io/v2',
       generateErrorHandlers: true,
       generateTypes: true,
       transliterateRussian: true,
     });
     
     console.log('\n✅ Пример выполнен успешно!');
-    console.log('📂 Проверьте папку: generated/test-api');
+    console.log('📂 Проверьте папку: generated/petstore');
     
   } catch (error) {
     console.error('❌ Ошибка:', error);

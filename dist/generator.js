@@ -39,6 +39,17 @@ class CodeGenerator {
         }
     }
     /**
+     * Проверяет есть ли security в операции
+     */
+    hasSecurityInSpec(operation) {
+        // Проверяем в оригинальной спецификации
+        const originalPath = this.spec.paths.find(p => p.operationId === operation.operationId);
+        if (!originalPath)
+            return false;
+        // В swagger 2.0 и OpenAPI 3.x security может быть массивом
+        return !!originalPath.security || false;
+    }
+    /**
      * Извлекает имена схем из операции
      */
     extractSchemasFromPath(path) {
@@ -98,7 +109,129 @@ class CodeGenerator {
         files.push(this.generateIndexFile(Array.from(operationsByTag.keys())));
         // Генерируем HTTP client helper
         files.push(this.generateHttpClientFile());
+        // ВАЖНО: Анализируем и добавляем недостающие импорты
+        this.fixMissingImports(files);
         return files;
+    }
+    /**
+     * Анализирует файлы и автоматически добавляет недостающие импорты
+     */
+    fixMissingImports(files) {
+        // Создаем карту: какие типы в каких файлах определены
+        const typeLocations = new Map();
+        for (const file of files) {
+            // Пропускаем служебные файлы
+            if (file.filename === 'index.ts' || file.filename === 'http-client.ts') {
+                continue;
+            }
+            // Извлекаем все экспортируемые интерфейсы
+            const interfaceMatches = file.content.matchAll(/export interface (\w+)/g);
+            for (const match of interfaceMatches) {
+                const typeName = match[1];
+                typeLocations.set(typeName, file.filename);
+            }
+        }
+        // Для каждого файла анализируем используемые типы
+        for (const file of files) {
+            if (file.filename === 'index.ts' || file.filename === 'http-client.ts') {
+                continue;
+            }
+            const usedTypes = this.extractUsedTypes(file.content);
+            const definedTypes = this.extractDefinedTypes(file.content);
+            const existingImports = this.extractExistingImports(file.content);
+            // Находим типы которые используются но не определены и не импортированы
+            const missingTypes = usedTypes.filter(type => !definedTypes.has(type) &&
+                !existingImports.has(type) &&
+                typeLocations.has(type));
+            if (missingTypes.length > 0) {
+                // Группируем импорты по файлам
+                const importsByFile = new Map();
+                for (const type of missingTypes) {
+                    const sourceFile = typeLocations.get(type);
+                    if (!importsByFile.has(sourceFile)) {
+                        importsByFile.set(sourceFile, new Set());
+                    }
+                    importsByFile.get(sourceFile).add(type);
+                }
+                // Добавляем импорты в начало файла
+                file.content = this.addImportsToFile(file.content, file.filename, importsByFile);
+            }
+        }
+    }
+    /**
+     * Извлекает все используемые типы из содержимого файла
+     */
+    extractUsedTypes(content) {
+        const types = new Set();
+        // Ищем типы в полях интерфейсов: name: TypeName или name?: TypeName
+        const fieldMatches = content.matchAll(/:\s*(\w+)(?:\[\])?[;,\s}]/g);
+        for (const match of fieldMatches) {
+            const typeName = match[1];
+            // Пропускаем примитивные типы
+            if (!['string', 'number', 'boolean', 'any', 'void', 'null', 'undefined', 'object'].includes(typeName)) {
+                types.add(typeName);
+            }
+        }
+        // Ищем типы в Promise<Type>
+        const promiseMatches = content.matchAll(/Promise<(\w+)(?:\[\])?>/g);
+        for (const match of promiseMatches) {
+            types.add(match[1]);
+        }
+        return Array.from(types);
+    }
+    /**
+     * Извлекает все определенные типы в файле
+     */
+    extractDefinedTypes(content) {
+        const types = new Set();
+        const interfaceMatches = content.matchAll(/export interface (\w+)/g);
+        for (const match of interfaceMatches) {
+            types.add(match[1]);
+        }
+        return types;
+    }
+    /**
+     * Извлекает уже существующие импорты
+     */
+    extractExistingImports(content) {
+        const types = new Set();
+        const importMatches = content.matchAll(/import\s+\{([^}]+)\}\s+from/g);
+        for (const match of importMatches) {
+            const imports = match[1].split(',').map(s => s.trim());
+            for (const imp of imports) {
+                types.add(imp);
+            }
+        }
+        return types;
+    }
+    /**
+     * Добавляет импорты в файл
+     */
+    addImportsToFile(content, currentFile, importsByFile) {
+        const lines = content.split('\n');
+        const importLines = [];
+        // Находим где заканчиваются существующие импорты
+        let lastImportIndex = -1;
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith('import ')) {
+                lastImportIndex = i;
+            }
+        }
+        // Генерируем новые импорты
+        for (const [sourceFile, types] of importsByFile.entries()) {
+            const relativePath = './' + sourceFile.replace('.ts', '');
+            const typesList = Array.from(types).sort().join(', ');
+            importLines.push(`import { ${typesList} } from '${relativePath}';`);
+        }
+        // Вставляем импорты после существующих
+        if (lastImportIndex >= 0) {
+            lines.splice(lastImportIndex + 1, 0, ...importLines);
+        }
+        else {
+            // Если импортов нет, добавляем в начало после первой строки
+            lines.splice(1, 0, ...importLines);
+        }
+        return lines.join('\n');
     }
     /**
      * Группирует операции по тегам
@@ -173,18 +306,117 @@ class CodeGenerator {
                 types.push('');
             }
         }
-        // Функции API
-        functions.push('/**');
-        functions.push(` * API методы для: ${tag}`);
-        functions.push(' */\n');
-        for (const operation of operations) {
-            functions.push(this.generateApiFunction(operation));
-            functions.push('');
+        // Генерируем функции или класс
+        if (this.config.useClasses) {
+            functions.push(this.generateApiClass(tag, operations));
+        }
+        else {
+            functions.push('/**');
+            functions.push(` * API методы для: ${tag}`);
+            functions.push(' */\n');
+            for (const operation of operations) {
+                functions.push(this.generateApiFunction(operation));
+                functions.push('');
+            }
         }
         return {
             filename,
             content: [...imports, ...types, ...functions].join('\n'),
         };
+    }
+    /**
+     * Генерирует класс API для тега
+     */
+    generateApiClass(tag, operations) {
+        const className = (0, string_helpers_1.toPascalCase)(tag) + 'Api';
+        const lines = [];
+        lines.push('/**');
+        lines.push(` * API класс для: ${tag}`);
+        lines.push(' */');
+        lines.push(`export class ${className} {`);
+        lines.push('');
+        // Генерируем методы класса
+        for (const operation of operations) {
+            lines.push(this.generateClassMethod(operation));
+            lines.push('');
+        }
+        lines.push('}');
+        lines.push('');
+        lines.push(`// Экспортируем синглтон инстанс`);
+        lines.push(`export const ${(0, string_helpers_1.toCamelCase)(tag)}Api = new ${className}();`);
+        return lines.join('\n');
+    }
+    /**
+     * Генерирует метод класса
+     */
+    generateClassMethod(operation) {
+        const lines = [];
+        const funcName = (0, string_helpers_1.toCamelCase)(operation.operationId);
+        // JSDoc
+        lines.push('  /**');
+        if (operation.summary || operation.description) {
+            lines.push(`   * ${operation.summary || operation.description || 'No Description'}`);
+        }
+        else {
+            lines.push('   * No Description');
+        }
+        lines.push('   *');
+        if (operation.tags && operation.tags.length > 0) {
+            lines.push(`   * @tags ${operation.tags.join(', ')}`);
+        }
+        lines.push(`   * @name ${operation.operationId}`);
+        lines.push(`   * @request ${operation.method}:${operation.path}`);
+        const hasAuth = this.spec.paths.some(p => p.operationId === operation.operationId &&
+            this.hasSecurityInSpec(p));
+        if (hasAuth) {
+            lines.push('   * @secure');
+        }
+        for (const [statusCode, response] of Object.entries(operation.responses)) {
+            const responseType = response.schema ? this.schemaToTypeScript(response.schema) : 'void';
+            const description = response.description || 'Success';
+            lines.push(`   * @response '${statusCode}' '${responseType}' ${description}`);
+        }
+        if (operation.deprecated) {
+            lines.push('   * @deprecated');
+        }
+        lines.push('   */');
+        // Сигнатура метода
+        const params = this.generateFunctionParameters(operation);
+        const returnType = this.generateReturnType(operation);
+        lines.push(`  async ${funcName}(${params}): Promise<${returnType}> {`);
+        // Тело метода
+        const pathParams = operation.parameters.filter(p => p.in === 'path');
+        const queryParams = operation.parameters.filter(p => p.in === 'query');
+        const headerParams = operation.parameters.filter(p => p.in === 'header');
+        let urlTemplate = operation.path;
+        for (const param of pathParams) {
+            urlTemplate = urlTemplate.replace(`{${param.name}}`, `\${${(0, string_helpers_1.toCamelCase)(param.name)}}`);
+        }
+        lines.push('    const response = await httpClient.request({');
+        lines.push(`      method: '${operation.method}',`);
+        lines.push(`      url: \`${urlTemplate}\`,`);
+        if (queryParams.length > 0) {
+            lines.push('      params: {');
+            for (const param of queryParams) {
+                lines.push(`        ${param.name}: ${(0, string_helpers_1.toCamelCase)(param.name)},`);
+            }
+            lines.push('      },');
+        }
+        if (headerParams.length > 0) {
+            lines.push('      headers: {');
+            for (const param of headerParams) {
+                lines.push(`        '${param.name}': ${(0, string_helpers_1.toCamelCase)(param.name)},`);
+            }
+            lines.push('      },');
+        }
+        const hasBody = operation.requestBody && operation.method !== 'GET';
+        if (hasBody) {
+            lines.push('      data: body,');
+        }
+        lines.push('    });');
+        lines.push('    return response.data;');
+        lines.push('  }');
+        return lines.join('\n');
     }
     /**
      * Получает локальные схемы для тега (не базовые)
@@ -270,11 +502,23 @@ class CodeGenerator {
                 if (propSchema.description) {
                     lines.push(`  /** ${propSchema.description} */`);
                 }
-                lines.push(`  ${propName}${isRequired ? '' : '?'}: ${tsType};`);
+                // Если имя поля содержит @ или другие спецсимволы, оборачиваем в кавычки
+                const safePropName = this.sanitizePropertyName(propName);
+                lines.push(`  ${safePropName}${isRequired ? '' : '?'}: ${tsType};`);
             }
         }
         lines.push('}');
         return lines.join('\n');
+    }
+    /**
+     * Безопасное имя свойства - оборачивает в кавычки если нужно
+     */
+    sanitizePropertyName(name) {
+        // Если содержит @, -, пробелы или другие спецсимволы, оборачиваем в кавычки
+        if (/[@\-\s\.]/.test(name) || !(0, string_helpers_1.isValidIdentifier)(name)) {
+            return `'${name}'`;
+        }
+        return name;
     }
     /**
      * Преобразует схему в TypeScript тип
@@ -332,13 +576,35 @@ class CodeGenerator {
     generateApiFunction(operation) {
         const lines = [];
         const funcName = (0, string_helpers_1.toCamelCase)(operation.operationId);
-        // JSDoc
+        // JSDoc с подробной информацией
         lines.push('/**');
-        if (operation.summary) {
-            lines.push(` * ${operation.summary}`);
+        // Описание
+        if (operation.summary || operation.description) {
+            lines.push(` * ${operation.summary || operation.description || 'No Description'}`);
         }
-        if (operation.description) {
-            lines.push(` * ${operation.description}`);
+        else {
+            lines.push(' * No Description');
+        }
+        lines.push(' *');
+        // @tags
+        if (operation.tags && operation.tags.length > 0) {
+            lines.push(` * @tags ${operation.tags.join(', ')}`);
+        }
+        // @name
+        lines.push(` * @name ${operation.operationId}`);
+        // @request
+        lines.push(` * @request ${operation.method}:${operation.path}`);
+        // @secure (если есть security)
+        const hasAuth = this.spec.paths.some(p => p.operationId === operation.operationId &&
+            this.hasSecurityInSpec(p));
+        if (hasAuth) {
+            lines.push(' * @secure');
+        }
+        // @response
+        for (const [statusCode, response] of Object.entries(operation.responses)) {
+            const responseType = response.schema ? this.schemaToTypeScript(response.schema) : 'void';
+            const description = response.description || 'Success';
+            lines.push(` * @response '${statusCode}' '${responseType}' ${description}`);
         }
         if (operation.deprecated) {
             lines.push(' * @deprecated');
@@ -352,41 +618,32 @@ class CodeGenerator {
         const pathParams = operation.parameters.filter(p => p.in === 'path');
         const queryParams = operation.parameters.filter(p => p.in === 'query');
         const headerParams = operation.parameters.filter(p => p.in === 'header');
-        // Подстановка path параметров
-        let url = operation.path;
+        // Формируем URL с подстановкой path параметров
+        let urlTemplate = operation.path;
         for (const param of pathParams) {
-            url = url.replace(`{${param.name}}`, `\${${(0, string_helpers_1.toCamelCase)(param.name)}}`);
+            urlTemplate = urlTemplate.replace(`{${param.name}}`, `\${${(0, string_helpers_1.toCamelCase)(param.name)}}`);
         }
-        lines.push(`  const url = \`${url}\`;`);
-        // Query параметры
-        if (queryParams.length > 0) {
-            lines.push('  const params = {');
-            for (const param of queryParams) {
-                lines.push(`    ${param.name}: ${(0, string_helpers_1.toCamelCase)(param.name)},`);
-            }
-            lines.push('  };');
-        }
-        // Headers
-        if (headerParams.length > 0) {
-            lines.push('  const headers = {');
-            for (const param of headerParams) {
-                lines.push(`    '${param.name}': ${(0, string_helpers_1.toCamelCase)(param.name)},`);
-            }
-            lines.push('  };');
-        }
-        // Request body
-        const hasBody = operation.requestBody && operation.method !== 'GET';
         // HTTP запрос
         if (this.config.httpClient === 'axios') {
             lines.push('  const response = await httpClient.request({');
             lines.push(`    method: '${operation.method}',`);
-            lines.push('    url,');
+            lines.push(`    url: \`${urlTemplate}\`,`);
             if (queryParams.length > 0) {
-                lines.push('    params,');
+                lines.push('    params: {');
+                for (const param of queryParams) {
+                    lines.push(`      ${param.name}: ${(0, string_helpers_1.toCamelCase)(param.name)},`);
+                }
+                lines.push('    },');
             }
             if (headerParams.length > 0) {
-                lines.push('    headers,');
+                lines.push('    headers: {');
+                for (const param of headerParams) {
+                    lines.push(`      '${param.name}': ${(0, string_helpers_1.toCamelCase)(param.name)},`);
+                }
+                lines.push('    },');
             }
+            // Request body
+            const hasBody = operation.requestBody && operation.method !== 'GET';
             if (hasBody) {
                 lines.push('    data: body,');
             }

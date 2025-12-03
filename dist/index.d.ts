@@ -31,6 +31,11 @@ export interface GeneratorConfig {
      * @default true
      */
     transliterateRussian?: boolean;
+    /**
+     * Генерировать методы как класс вместо отдельных функций
+     * @default false
+     */
+    useClasses?: boolean;
 }
 /**
  * Основной класс для генерации API клиента из OpenAPI спецификации

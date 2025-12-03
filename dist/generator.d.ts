@@ -18,6 +18,10 @@ export declare class CodeGenerator {
      */
     private identifyBaseSchemas;
     /**
+     * Проверяет есть ли security в операции
+     */
+    private hasSecurityInSpec;
+    /**
      * Извлекает имена схем из операции
      */
     private extractSchemasFromPath;
@@ -25,6 +29,26 @@ export declare class CodeGenerator {
      * Генерирует все файлы
      */
     generate(): GeneratedFile[];
+    /**
+     * Анализирует файлы и автоматически добавляет недостающие импорты
+     */
+    private fixMissingImports;
+    /**
+     * Извлекает все используемые типы из содержимого файла
+     */
+    private extractUsedTypes;
+    /**
+     * Извлекает все определенные типы в файле
+     */
+    private extractDefinedTypes;
+    /**
+     * Извлекает уже существующие импорты
+     */
+    private extractExistingImports;
+    /**
+     * Добавляет импорты в файл
+     */
+    private addImportsToFile;
     /**
      * Группирует операции по тегам
      */
@@ -38,6 +62,14 @@ export declare class CodeGenerator {
      */
     private generateTagFile;
     /**
+     * Генерирует класс API для тега
+     */
+    private generateApiClass;
+    /**
+     * Генерирует метод класса
+     */
+    private generateClassMethod;
+    /**
      * Получает локальные схемы для тега (не базовые)
      */
     private getLocalSchemasForTag;
@@ -49,6 +81,10 @@ export declare class CodeGenerator {
      * Генерирует определение типа из схемы
      */
     private generateTypeDefinition;
+    /**
+     * Безопасное имя свойства - оборачивает в кавычки если нужно
+     */
+    private sanitizePropertyName;
     /**
      * Преобразует схему в TypeScript тип
      */

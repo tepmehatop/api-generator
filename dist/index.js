@@ -53,6 +53,7 @@ class ApiGenerator {
             generateErrorHandlers: true,
             generateTypes: true,
             transliterateRussian: true,
+            useClasses: false,
             baseUrl: '',
             ...config
         };

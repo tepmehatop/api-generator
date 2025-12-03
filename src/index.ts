@@ -44,6 +44,12 @@ export interface GeneratorConfig {
    * @default true
    */
   transliterateRussian?: boolean;
+  
+  /**
+   * Генерировать методы как класс вместо отдельных функций
+   * @default false
+   */
+  useClasses?: boolean;
 }
 
 /**
@@ -58,6 +64,7 @@ export class ApiGenerator {
       generateErrorHandlers: true,
       generateTypes: true,
       transliterateRussian: true,
+      useClasses: false,
       baseUrl: '',
       ...config
     };
