@@ -765,28 +765,81 @@ class CodeGenerator {
     generateHttpClientFile() {
         let content = '';
         if (this.config.httpClient === 'axios') {
-            content = `import axios from 'axios';
-
-/**
- * HTTP клиент для API запросов
- */
-export const httpClient = axios.create({
-  baseURL: '${this.config.baseUrl || this.spec.baseUrl}',
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
-// Interceptor для обработки ошибок
-httpClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    console.error('API Error:', error);
-    return Promise.reject(error);
-  }
-);
-`;
+            const baseUrlValue = this.config.baseUrl || this.spec.baseUrl;
+            const isEnvVar = baseUrlValue.startsWith('process.env.');
+            const lines = [];
+            lines.push("import axios from 'axios';\n");
+            lines.push('/**');
+            lines.push(' * HTTP клиент для API запросов');
+            lines.push(' */');
+            lines.push('export const httpClient = axios.create({');
+            // baseURL - либо переменная окружения, либо статичная строка
+            if (isEnvVar) {
+                lines.push(`  baseURL: ${baseUrlValue},`);
+            }
+            else {
+                lines.push(`  baseURL: '${baseUrlValue}',`);
+            }
+            lines.push('  timeout: 30000,');
+            lines.push('  headers: {');
+            lines.push("    'Content-Type': 'application/json',");
+            lines.push('  },');
+            lines.push('});\n');
+            // Interceptor для токена авторизации
+            if (this.config.authTokenVar) {
+                lines.push('// Interceptor для добавления токена авторизации');
+                lines.push('httpClient.interceptors.request.use(');
+                lines.push('  (config) => {');
+                lines.push(`    const token = ${this.config.authTokenVar};`);
+                lines.push('    if (token) {');
+                lines.push("      config.headers.Authorization = `Bearer ${token}`;");
+                lines.push('    }');
+                lines.push('    return config;');
+                lines.push('  },');
+                lines.push('  (error) => Promise.reject(error)');
+                lines.push(');\n');
+            }
+            // Interceptor для обработки ошибок
+            if (this.config.generateErrorHandlers) {
+                lines.push('// Interceptor для обработки ошибок');
+                lines.push('httpClient.interceptors.response.use(');
+                lines.push('  (response) => response,');
+                lines.push('  (error) => {');
+                lines.push('    console.error(\'API Error:\', error);');
+                lines.push('    return Promise.reject(error);');
+                lines.push('  }');
+                lines.push(');\n');
+            }
+            // Утилиты для управления токеном
+            lines.push('/**');
+            lines.push(' * Устанавливает кастомный токен для всех последующих запросов');
+            lines.push(' * @param token - Токен авторизации или null для удаления токена');
+            lines.push(' */');
+            lines.push('export function setAuthToken(token: string | null) {');
+            lines.push('  if (token === null) {');
+            lines.push("    delete httpClient.defaults.headers.common['Authorization'];");
+            lines.push('  } else {');
+            lines.push("    httpClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;");
+            lines.push('  }');
+            lines.push('}\n');
+            lines.push('/**');
+            lines.push(' * Выполняет запрос с переопределенным токеном (одноразово)');
+            lines.push(' * @param config - Конфигурация axios');
+            lines.push(' * @param token - Токен авторизации или null для запроса без токена');
+            lines.push(' */');
+            lines.push('export async function requestWithToken<T = any>(');
+            lines.push('  config: any,');
+            lines.push('  token: string | null = null');
+            lines.push(') {');
+            lines.push('  const customConfig = { ...config };');
+            lines.push('  if (token === null) {');
+            lines.push("    customConfig.headers = { ...customConfig.headers, Authorization: undefined };");
+            lines.push('  } else {');
+            lines.push("    customConfig.headers = { ...customConfig.headers, Authorization: `Bearer ${token}` };");
+            lines.push('  }');
+            lines.push('  return httpClient.request<T>(customConfig);');
+            lines.push('}');
+            content = lines.join('\n');
         }
         return {
             filename: 'http-client.ts',

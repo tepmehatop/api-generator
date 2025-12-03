@@ -12,7 +12,7 @@ export declare class CodeGenerator {
     private spec;
     private usedSchemas;
     private baseSchemas;
-    constructor(config: Required<GeneratorConfig>, spec: ParsedSpec);
+    constructor(config: GeneratorConfig, spec: ParsedSpec);
     /**
      * Определяет базовые схемы, используемые в нескольких тегах
      */

@@ -1,3 +1,4 @@
+export { generateApiTests, ApiTestConfig } from './test-generator';
 export interface GeneratorConfig {
     /**
      * URL или путь к OpenAPI документу (JSON)
@@ -14,8 +15,16 @@ export interface GeneratorConfig {
     httpClient?: 'axios' | 'fetch';
     /**
      * Базовый URL для API запросов (опционально)
+     * Можно передать как строку или имя переменной окружения
+     * @example 'https://api.example.com'
+     * @example 'process.env.STAND_URL'
      */
     baseUrl?: string;
+    /**
+     * Переменная окружения для токена авторизации
+     * @example 'process.env.AUTH_TOKEN'
+     */
+    authTokenVar?: string;
     /**
      * Добавить хелперы для обработки ошибок
      * @default true

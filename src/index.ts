@@ -5,6 +5,9 @@ import { OpenAPIParser } from './parser';
 import { CodeGenerator } from './generator';
 import { transliterate } from './utils/transliterate';
 
+// Экспорт функции генерации тестов
+export { generateApiTests, ApiTestConfig } from './test-generator';
+
 export interface GeneratorConfig {
   /**
    * URL или путь к OpenAPI документу (JSON)
@@ -24,8 +27,17 @@ export interface GeneratorConfig {
   
   /**
    * Базовый URL для API запросов (опционально)
+   * Можно передать как строку или имя переменной окружения
+   * @example 'https://api.example.com'
+   * @example 'process.env.STAND_URL'
    */
   baseUrl?: string;
+  
+  /**
+   * Переменная окружения для токена авторизации
+   * @example 'process.env.AUTH_TOKEN'
+   */
+  authTokenVar?: string;
   
   /**
    * Добавить хелперы для обработки ошибок
@@ -56,7 +68,14 @@ export interface GeneratorConfig {
  * Основной класс для генерации API клиента из OpenAPI спецификации
  */
 export class ApiGenerator {
-  private config: Required<GeneratorConfig>;
+  private config: GeneratorConfig & {
+    httpClient: 'axios' | 'fetch';
+    generateErrorHandlers: boolean;
+    generateTypes: boolean;
+    transliterateRussian: boolean;
+    useClasses: boolean;
+    baseUrl: string;
+  };
   
   constructor(config: GeneratorConfig) {
     this.config = {
