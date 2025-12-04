@@ -46,6 +46,9 @@ async function generateApiTests(config) {
     const fullConfig = {
         generateNegativeTests: true,
         generatePositiveTests: true,
+        generatePairwiseTests: false,
+        baseTestPath: '../../../fixtures/baseTest',
+        axiosHelpersPath: '../../../helpers/axiosHelpers',
         ...config
     };
     console.log('🧪 Начинаю генерацию API тестов...');
@@ -54,6 +57,12 @@ async function generateApiTests(config) {
     // Извлекаем информацию о методах
     const methods = extractMethodsFromFile(apiFileContent);
     console.log(`✓ Найдено методов: ${methods.length}`);
+    // Проверяем что у всех методов есть path
+    const methodsWithoutPath = methods.filter(m => !m.path || m.path.trim() === '');
+    if (methodsWithoutPath.length > 0) {
+        console.warn('⚠️  Предупреждение: Найдены методы без endpoint:');
+        methodsWithoutPath.forEach(m => console.warn(`   - ${m.name}`));
+    }
     // Создаем выходную папку если не существует
     if (!fs.existsSync(fullConfig.outputDir)) {
         fs.mkdirSync(fullConfig.outputDir, { recursive: true });
@@ -61,6 +70,10 @@ async function generateApiTests(config) {
     // Генерируем тест для каждого метода
     let generatedCount = 0;
     for (const method of methods) {
+        if (!method.path || method.path.trim() === '') {
+            console.warn(`⚠️  Пропускаю ${method.name} - endpoint не найден`);
+            continue;
+        }
         const testContent = generateTestForMethod(method, fullConfig);
         const testFileName = generateTestFileName(method);
         const testFilePath = path.join(fullConfig.outputDir, testFileName);
@@ -76,6 +89,8 @@ async function generateApiTests(config) {
  */
 function extractMethodsFromFile(content) {
     const methods = [];
+    // Сначала извлекаем все DTO из файла
+    const dtoSchemas = extractDTOSchemas(content);
     // Регулярка для поиска JSDoc + функции
     const methodRegex = /\/\*\*[\s\S]*?\*\/\s*export\s+async\s+function\s+(\w+)\s*\((.*?)\)\s*:\s*Promise<(.+?)>\s*{/g;
     let match;
@@ -105,6 +120,15 @@ function extractMethodsFromFile(content) {
             const colonIndex = p.indexOf(':');
             return colonIndex > 0 ? p.substring(0, colonIndex).trim() : p;
         });
+        // Находим body параметр и его тип
+        let bodySchema;
+        if (params.includes('body:') || params.includes('data:')) {
+            const bodyMatch = params.match(/(?:body|data):\s*(\w+)/);
+            if (bodyMatch) {
+                const bodyTypeName = bodyMatch[1];
+                bodySchema = dtoSchemas.find(dto => dto.name === bodyTypeName);
+            }
+        }
         methods.push({
             name: methodName,
             httpMethod,
@@ -112,17 +136,72 @@ function extractMethodsFromFile(content) {
             parameters,
             returnType,
             tags,
-            hasAuth
+            hasAuth,
+            bodySchema
         });
     }
     return methods;
 }
 /**
+ * Извлекает DTO схемы из файла
+ */
+function extractDTOSchemas(content) {
+    const schemas = [];
+    // Регулярка для поиска интерфейсов
+    const interfaceRegex = /export\s+interface\s+(\w+)\s*{([^}]+)}/g;
+    let match;
+    while ((match = interfaceRegex.exec(content)) !== null) {
+        const interfaceName = match[1];
+        const interfaceBody = match[2];
+        const fields = extractFieldsFromInterface(interfaceBody);
+        schemas.push({
+            name: interfaceName,
+            fields
+        });
+    }
+    return schemas;
+}
+/**
+ * Извлекает поля из интерфейса
+ */
+function extractFieldsFromInterface(interfaceBody) {
+    const fields = [];
+    // Разбиваем на строки и парсим каждое поле
+    const lines = interfaceBody.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    for (const line of lines) {
+        // Пропускаем комментарии
+        if (line.startsWith('//') || line.startsWith('/*') || line.startsWith('*')) {
+            continue;
+        }
+        // Парсим поле: name?: type;
+        const fieldMatch = line.match(/^['"]?(\w+)['"]?\??:\s*(.+?);?$/);
+        if (fieldMatch) {
+            const fieldName = fieldMatch[1];
+            const fieldType = fieldMatch[2].trim();
+            const required = !line.includes('?:');
+            const isArray = fieldType.includes('[]');
+            // Проверяем на enum
+            let enumValues;
+            const enumMatch = fieldType.match(/['"]([^'"]+)['"](?:\s*\|\s*['"]([^'"]+)['"])+/);
+            if (enumMatch) {
+                enumValues = fieldType.match(/['"]([^'"]+)['"]/g)?.map(v => v.replace(/['"]/g, ''));
+            }
+            fields.push({
+                name: fieldName,
+                type: fieldType.replace('[]', ''),
+                required,
+                isArray,
+                enumValues
+            });
+        }
+    }
+    return fields;
+}
+/**
  * Генерирует имя файла теста
  */
 function generateTestFileName(method) {
-    // Используем имя функции как базу для имени файла
-    return `${method.name}.spec.ts`;
+    return `${method.name}.test.ts`;
 }
 /**
  * Генерирует содержимое теста для метода
@@ -130,10 +209,35 @@ function generateTestFileName(method) {
 function generateTestForMethod(method, config) {
     const lines = [];
     // Импорты
-    lines.push("import { test, expect } from '@playwright/test';");
+    lines.push(`import test, { expect } from '${config.baseTestPath}';`);
     lines.push("import axios from 'axios';");
+    lines.push(`import { configApiHeaderAdmin, configApiHeaderNoRights } from '${config.axiosHelpersPath}';`);
     lines.push('');
-    // Вспомогательные классы и константы
+    // Извлекаем ID параметры из пути
+    const pathParams = extractPathParams(method.path);
+    const hasIdParams = pathParams.length > 0;
+    // Если есть ID параметры, объявляем их заранее
+    if (hasIdParams) {
+        lines.push('// ID параметры для endpoint');
+        for (const param of pathParams) {
+            lines.push(`const ${param} = 1; // TODO: заменить на актуальный ID`);
+        }
+        lines.push('');
+    }
+    // Endpoint с подстановкой ID
+    let endpointValue = method.path;
+    if (hasIdParams) {
+        for (const param of pathParams) {
+            endpointValue = endpointValue.replace(`{${param}}`, `\${${param}}`);
+        }
+        lines.push(`const endpoint = \`${endpointValue}\`;`);
+    }
+    else {
+        lines.push(`const endpoint = '${endpointValue}';`);
+    }
+    lines.push(`const httpMethod = '${method.httpMethod}';`);
+    lines.push('');
+    // Коды статусов
     lines.push('// Коды статусов');
     lines.push('const apiErrorCodes = {');
     lines.push('  success: 200,');
@@ -144,14 +248,8 @@ function generateTestForMethod(method, config) {
     lines.push('  notFound: 404,');
     lines.push('  methodNotAllowed: 405,');
     lines.push('  unsupportedMediaType: 415,');
-    lines.push('  unprocessableEntity: 422,');
     lines.push('};');
     lines.push('');
-    // Эндпоинт и метод
-    lines.push(`const endpoint = '${method.path}';`);
-    lines.push(`const httpMethod = '${method.httpMethod}';`);
-    lines.push('');
-    // Коды для удобства
     lines.push('const unauthorized = apiErrorCodes.unauthorized;');
     lines.push('const badRequest = apiErrorCodes.badRequest;');
     lines.push('const forbidden = apiErrorCodes.forbidden;');
@@ -160,23 +258,7 @@ function generateTestForMethod(method, config) {
     lines.push('const unsupportedMediaType = apiErrorCodes.unsupportedMediaType;');
     lines.push(`const success = ${getSuccessCode(method)};`);
     lines.push('');
-    // Headers конфигурации
-    lines.push('// Конфигурация headers');
-    lines.push('const configHeaders = {');
-    lines.push('  headers: {');
-    lines.push("    'Authorization': `Bearer ${process.env.AUTH_TOKEN}`,");
-    lines.push("    'Content-Type': 'application/json',");
-    lines.push('  }');
-    lines.push('};');
-    lines.push('');
-    lines.push('const configHeadersNoRights = {');
-    lines.push('  headers: {');
-    lines.push("    'Authorization': 'Bearer restricted_token_here', // TODO: заменить на токен без прав");
-    lines.push("    'Content-Type': 'application/json',");
-    lines.push('  }');
-    lines.push('};');
-    lines.push('');
-    // CaseInfo
+    // Case Info
     lines.push('// Информация о тест-кейсе');
     lines.push('const caseInfoObj = {');
     lines.push(`  testCase: 'T${Math.floor(Math.random() * 10000)}',`);
@@ -191,34 +273,25 @@ function generateTestForMethod(method, config) {
     lines.push(' * - Без токена (401)');
     if (hasBodyParam(method)) {
         lines.push(' * - С токеном но без Body (400)');
-        lines.push(' * - Без указания обязательных полей (400)');
     }
     lines.push(' * - Проверка methodNotAllowed для неподдерживаемых HTTP методов');
     if (method.hasAuth) {
         lines.push(' * - С токеном пользователя без прав (403)');
     }
     lines.push(' * - С неверными заголовками Content-Type (415)');
-    if (hasPathParams(method)) {
+    if (hasIdParams) {
         lines.push(' * - С несуществующим ID (404)');
     }
-    lines.push(' * ');
-    lines.push(' * Дополнительные проверки:');
-    lines.push(' * - Проверка структуры ответа');
-    lines.push(' * - Проверка всех полей response');
     lines.push(' */');
     lines.push('');
     // Test suite
     lines.push('test.describe.configure({ mode: "parallel" });');
     lines.push(`test.describe(\`API тесты для эндпоинта \${httpMethod} >> \${endpoint}\`, async () => {`);
     lines.push('');
-    // Вспомогательная функция для построения URL
-    const urlBuilder = generateUrlBuilder(method);
-    lines.push(urlBuilder);
-    lines.push('');
     // Тест 1: Без токена (401)
     if (config.generateNegativeTests) {
         lines.push(`  test(\`\${httpMethod} без TOKEN (\${unauthorized}) @api\`, async ({ page }, testInfo) => {`);
-        const axiosCall = generateAxiosCall(method, false, false);
+        const axiosCall = generateSimpleAxiosCall(method, false);
         lines.push(`    await ${axiosCall}.catch(async function(error) {`);
         lines.push('      await expect(error.response.status).toBe(unauthorized);');
         lines.push('      await expect(error.response.statusText).toBe("Unauthorized");');
@@ -228,31 +301,29 @@ function generateTestForMethod(method, config) {
         lines.push('    });');
         lines.push('  });');
         lines.push('');
-        // Тест 2: С токеном но без body (если есть body параметр)
+        // Тест 2: С токеном но без body
         if (hasBodyParam(method)) {
             lines.push(`  test(\`\${httpMethod} с токеном без Body (\${badRequest}) @api\`, async ({ page }, testInfo) => {`);
-            const axiosCallNoBody = generateAxiosCall(method, true, false);
+            const axiosCallNoBody = generateSimpleAxiosCall(method, true, true);
             lines.push(`    await ${axiosCallNoBody}.catch(async function(error) {`);
             lines.push('      await expect(error.response.status).toBe(badRequest);');
             lines.push('      await expect(error.response.statusText).toBe("Bad Request");');
             lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
             lines.push(`      await expect(error.config.method).toBe('${method.httpMethod.toLowerCase()}');`);
-            lines.push('      await expect(error.config.url).toContain(endpoint);');
             lines.push('    });');
             lines.push('  });');
             lines.push('');
         }
-        // Тест 3-5: Method Not Allowed для других HTTP методов
-        const otherMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].filter(m => m !== method.httpMethod);
+        // Тесты 3-5: Method Not Allowed
+        const otherMethods = ['GET', 'POST', 'PUT', 'DELETE'].filter(m => m !== method.httpMethod);
         for (const otherMethod of otherMethods.slice(0, 3)) {
             lines.push(`  test(\`${otherMethod} с токеном (\${methodNotAllowed}) @api\`, async ({ page }, testInfo) => {`);
-            const wrongMethodCall = generateAxiosCallWrongMethod(method, otherMethod);
+            const wrongMethodCall = generateWrongMethodCall(otherMethod);
             lines.push(`    await ${wrongMethodCall}.catch(async function(error) {`);
             lines.push('      await expect(error.response.status).toBe(methodNotAllowed);');
             lines.push('      await expect(error.response.statusText).toBe("Method Not Allowed");');
             lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
             lines.push(`      await expect(error.config.method).toBe('${otherMethod.toLowerCase()}');`);
-            lines.push('      await expect(error.config.url).toContain(endpoint);');
             lines.push('    });');
             lines.push('  });');
             lines.push('');
@@ -260,13 +331,11 @@ function generateTestForMethod(method, config) {
         // Тест 6: С пользователем без прав (403)
         if (method.hasAuth) {
             lines.push(`  test(\`\${httpMethod} с пользователем без прав (\${forbidden}) @api\`, async ({ page }, testInfo) => {`);
-            const axiosCallNoRights = generateAxiosCall(method, true, true, 'configHeadersNoRights');
+            const axiosCallNoRights = generateSimpleAxiosCall(method, true, false, 'configApiHeaderNoRights');
             lines.push(`    await ${axiosCallNoRights}.catch(async function(error) {`);
             lines.push('      await expect(error.response.status).toBe(forbidden);');
             lines.push('      await expect(error.response.statusText).toBe("Forbidden");');
             lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
-            lines.push(`      await expect(error.config.method).toBe('${method.httpMethod.toLowerCase()}');`);
-            lines.push('      await expect(error.config.url).toContain(endpoint);');
             lines.push('    });');
             lines.push('  });');
             lines.push('');
@@ -280,48 +349,177 @@ function generateTestForMethod(method, config) {
             lines.push("        'Content-Type': 'application/xml',");
             lines.push('      }');
             lines.push('    };');
-            const axiosCallWrongType = generateAxiosCall(method, true, true, 'wrongHeaders');
+            const axiosCallWrongType = generateSimpleAxiosCall(method, true, false, 'wrongHeaders');
             lines.push(`    await ${axiosCallWrongType}.catch(async function(error) {`);
             lines.push('      await expect(error.response.status).toBe(unsupportedMediaType);');
             lines.push('      await expect(error.response.statusText).toContain("Unsupported Media Type");');
-            lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
             lines.push('    });');
             lines.push('  });');
             lines.push('');
         }
         // Тест 8: 404 для несуществующего ресурса
-        if (hasPathParams(method)) {
+        if (hasIdParams) {
             lines.push(`  test(\`\${httpMethod} с несуществующим ID (\${notFound}) @api\`, async ({ page }, testInfo) => {`);
-            const axiosCall404 = generateAxiosCall(method, true, true, 'configHeaders', true);
+            // Переопределяем ID на несуществующий
+            for (const param of pathParams) {
+                lines.push(`    const ${param}NotFound = 999999999;`);
+            }
+            const notFoundEndpoint = method.path;
+            let endpointWith404 = notFoundEndpoint;
+            for (const param of pathParams) {
+                endpointWith404 = endpointWith404.replace(`{${param}}`, `\${${param}NotFound}`);
+            }
+            lines.push(`    const endpoint404 = \`${endpointWith404}\`;`);
+            const axiosCall404 = generateSimpleAxiosCall(method, true, false, 'configApiHeaderAdmin', 'endpoint404');
             lines.push(`    await ${axiosCall404}.catch(async function(error) {`);
             lines.push('      await expect(error.response.status).toBe(notFound);');
             lines.push('      await expect(error.response.statusText).toBe("Not Found");');
-            lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
             lines.push('    });');
             lines.push('  });');
             lines.push('');
         }
     }
-    // Позитивный тест
-    if (config.generatePositiveTests) {
-        lines.push(`  test(\`\${httpMethod} успешный запрос (\${success}) @api\`, async ({ page }, testInfo) => {`);
-        lines.push('    // TODO: Подготовить валидные тестовые данные');
-        const axiosCallSuccess = generateAxiosCall(method, true, true);
-        lines.push(`    const response = await ${axiosCallSuccess};`);
+    // Позитивные тесты
+    if (config.generatePositiveTests && method.bodySchema) {
         lines.push('');
-        lines.push('    // Проверки статуса');
+        lines.push('  // ============================================');
+        lines.push('  // ПОЗИТИВНЫЕ ТЕСТЫ');
+        lines.push('  // ============================================');
+        lines.push('');
+        // Генерируем тестовые данные
+        const testDataSection = generateTestDataSection(method.bodySchema);
+        lines.push(testDataSection);
+        lines.push('');
+        // Тест 1: Только обязательные поля
+        lines.push(`  test(\`\${httpMethod} с обязательными полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+        lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, requiredFieldsOnly, configApiHeaderAdmin);');
+        lines.push('');
         lines.push('    await expect(response.status).toBe(success);');
         lines.push('    await expect(response.data).toBeDefined();');
-        lines.push('');
-        lines.push('    // TODO: Добавить проверки структуры response');
-        lines.push('    // TODO: Добавить проверки обязательных полей');
-        lines.push('    // TODO: Добавить проверки типов данных');
+        lines.push('    // TODO: Добавить проверки обязательных полей в response');
         lines.push('  });');
         lines.push('');
+        // Тест 2: Все поля
+        lines.push(`  test(\`\${httpMethod} со всеми полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+        lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, allFieldsFilled, configApiHeaderAdmin);');
+        lines.push('');
+        lines.push('    await expect(response.status).toBe(success);');
+        lines.push('    await expect(response.data).toBeDefined();');
+        lines.push('    // TODO: Добавить проверки всех полей в response');
+        lines.push('  });');
+        lines.push('');
+    }
+    else if (config.generatePositiveTests && !hasBodyParam(method)) {
+        // Для GET/DELETE без body
+        lines.push('');
+        lines.push('  // ============================================');
+        lines.push('  // ПОЗИТИВНЫЕ ТЕСТЫ');
+        lines.push('  // ============================================');
+        lines.push('');
+        lines.push(`  test(\`\${httpMethod} успешный запрос (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+        const axiosCallSuccess = generateSimpleAxiosCall(method, true);
+        lines.push(`    const response = await ${axiosCallSuccess};`);
+        lines.push('');
+        lines.push('    await expect(response.status).toBe(success);');
+        lines.push('    await expect(response.data).toBeDefined();');
+        lines.push('  });');
+        lines.push('');
+    }
+    // Pairwise тесты
+    if (config.generatePairwiseTests && method.bodySchema) {
+        lines.push('');
+        lines.push('  // ============================================');
+        lines.push('  // PAIRWISE ТЕСТЫ');
+        lines.push('  // ============================================');
+        lines.push('');
+        // Генерируем pairwise тестовые данные
+        const pairwiseDataSection = generatePairwiseTestDataSection(method.bodySchema);
+        lines.push(pairwiseDataSection);
+        lines.push('');
+        // Тип 1: Комбинации необязательных полей
+        const optionalFields = method.bodySchema.fields.filter(f => !f.required);
+        if (optionalFields.length > 0) {
+            lines.push('  // Тип 1: Комбинации необязательных полей');
+            lines.push('');
+            const combinations = generateOptionalFieldsCombinations(optionalFields);
+            combinations.forEach((combo, index) => {
+                lines.push(`  test(\`\${httpMethod} pairwise комбинация ${index + 1} (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+                lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseCombo${index + 1}, configApiHeaderAdmin);`);
+                lines.push('');
+                lines.push('    await expect(response.status).toBe(success);');
+                lines.push('    await expect(response.data).toBeDefined();');
+                lines.push('  });');
+                lines.push('');
+            });
+        }
+        // Тип 2: Различные значения enum полей
+        const enumFields = method.bodySchema.fields.filter(f => f.enumValues && f.enumValues.length > 0);
+        if (enumFields.length > 0) {
+            lines.push('  // Тип 2: Различные значения enum полей');
+            lines.push('');
+            enumFields.forEach(field => {
+                field.enumValues?.forEach((enumValue, index) => {
+                    lines.push(`  test(\`\${httpMethod} с ${field.name}='${enumValue}' (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+                    lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseEnum_${field.name}_${index + 1}, configApiHeaderAdmin);`);
+                    lines.push('');
+                    lines.push('    await expect(response.status).toBe(success);');
+                    lines.push('    await expect(response.data).toBeDefined();');
+                    lines.push('  });');
+                    lines.push('');
+                });
+            });
+        }
     }
     lines.push('});');
     lines.push('');
     return lines.join('\n');
+}
+/**
+ * Генерирует простой axios вызов с использованием process.env.StandURL
+ */
+function generateSimpleAxiosCall(method, withAuth, emptyBody = false, configVar = 'configApiHeaderAdmin', endpointVar = 'endpoint') {
+    const axiosMethod = method.httpMethod.toLowerCase();
+    const url = `process.env.StandURL + ${endpointVar}`;
+    if (axiosMethod === 'get' || axiosMethod === 'delete') {
+        if (withAuth) {
+            return `axios.${axiosMethod}(${url}, ${configVar})`;
+        }
+        else {
+            return `axios.${axiosMethod}(${url})`;
+        }
+    }
+    else {
+        // POST, PUT, PATCH
+        const body = emptyBody ? '{}' : '{ /* TODO: заполнить тестовыми данными */ }';
+        if (withAuth) {
+            return `axios.${axiosMethod}(${url}, ${body}, ${configVar})`;
+        }
+        else {
+            return `axios.${axiosMethod}(${url}, ${body})`;
+        }
+    }
+}
+/**
+ * Генерирует вызов с неправильным HTTP методом
+ */
+function generateWrongMethodCall(wrongMethod) {
+    const axiosMethod = wrongMethod.toLowerCase();
+    const url = 'process.env.StandURL + endpoint';
+    if (axiosMethod === 'get' || axiosMethod === 'delete') {
+        return `axios.${axiosMethod}(${url}, configApiHeaderAdmin)`;
+    }
+    else {
+        return `axios.${axiosMethod}(${url}, {}, configApiHeaderAdmin)`;
+    }
+}
+/**
+ * Извлекает path параметры из пути
+ */
+function extractPathParams(path) {
+    const matches = path.match(/\{([^}]+)\}/g);
+    if (!matches)
+        return [];
+    return matches.map(m => m.replace(/[{}]/g, ''));
 }
 /**
  * Определяет код успеха для метода
@@ -340,164 +538,161 @@ function hasBodyParam(method) {
         ['POST', 'PUT', 'PATCH'].includes(method.httpMethod);
 }
 /**
- * Проверяет есть ли path параметры
+ * Генерирует секцию с тестовыми данными
  */
-function hasPathParams(method) {
-    return method.path.includes('{');
-}
-/**
- * Генерирует функцию для построения URL
- */
-function generateUrlBuilder(method) {
+function generateTestDataSection(schema) {
     const lines = [];
-    lines.push('  // Функция для построения URL');
-    lines.push('  function buildUrl(params: any = {}) {');
-    lines.push('    let url = process.env.STAND_URL + endpoint;');
-    if (hasPathParams(method)) {
-        lines.push('    // Подставляем path параметры');
-        const pathParams = extractPathParams(method.path);
-        for (const param of pathParams) {
-            lines.push(`    url = url.replace('{${param}}', params.${param} || '1');`);
-        }
-    }
-    lines.push('    return url;');
-    lines.push('  }');
+    lines.push('  // Тестовые данные для позитивных тестов');
+    lines.push('');
+    // Только обязательные поля
+    lines.push('  // Объект с только обязательными полями');
+    lines.push('  const requiredFieldsOnly = {');
+    const requiredFields = schema.fields.filter(f => f.required);
+    requiredFields.forEach((field, index) => {
+        const value = generateMockValue(field);
+        const comma = index < requiredFields.length - 1 ? ',' : '';
+        lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
+    });
+    lines.push('  };');
+    lines.push('');
+    // Все поля
+    lines.push('  // Объект со всеми полями');
+    lines.push('  const allFieldsFilled = {');
+    schema.fields.forEach((field, index) => {
+        const value = generateMockValue(field);
+        const comma = index < schema.fields.length - 1 ? ',' : '';
+        lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
+    });
+    lines.push('  };');
     return lines.join('\n');
 }
 /**
- * Извлекает path параметры из пути
+ * Генерирует секцию с pairwise тестовыми данными
  */
-function extractPathParams(path) {
-    const matches = path.match(/\{([^}]+)\}/g);
-    if (!matches)
-        return [];
-    return matches.map(m => m.replace(/[{}]/g, ''));
+function generatePairwiseTestDataSection(schema) {
+    const lines = [];
+    lines.push('  // Тестовые данные для pairwise тестов');
+    lines.push('');
+    const requiredFields = schema.fields.filter(f => f.required);
+    const optionalFields = schema.fields.filter(f => !f.required);
+    const enumFields = schema.fields.filter(f => f.enumValues && f.enumValues.length > 0);
+    // Комбинации необязательных полей
+    if (optionalFields.length > 0) {
+        const combinations = generateOptionalFieldsCombinations(optionalFields);
+        combinations.forEach((combo, index) => {
+            lines.push(`  // Комбинация ${index + 1}: обязательные поля + ${combo.map(f => f.name).join(', ')}`);
+            lines.push(`  const pairwiseCombo${index + 1} = {`);
+            // Обязательные поля
+            requiredFields.forEach(field => {
+                const value = generateMockValue(field);
+                lines.push(`    ${field.name}: ${value},`);
+            });
+            // Выбранные необязательные поля
+            combo.forEach((field, fieldIndex) => {
+                const value = generateMockValue(field);
+                const comma = fieldIndex < combo.length - 1 ? ',' : '';
+                lines.push(`    ${field.name}: ${value}${comma}`);
+            });
+            lines.push('  };');
+            lines.push('');
+        });
+    }
+    // Различные значения enum полей
+    if (enumFields.length > 0) {
+        enumFields.forEach(field => {
+            field.enumValues?.forEach((enumValue, index) => {
+                lines.push(`  // Тест с ${field.name} = '${enumValue}'`);
+                lines.push(`  const pairwiseEnum_${field.name}_${index + 1} = {`);
+                // Обязательные поля
+                requiredFields.forEach(reqField => {
+                    const value = generateMockValue(reqField);
+                    lines.push(`    ${reqField.name}: ${value},`);
+                });
+                // Enum поле с конкретным значением
+                lines.push(`    ${field.name}: '${enumValue}'`);
+                lines.push('  };');
+                lines.push('');
+            });
+        });
+    }
+    return lines.join('\n');
 }
 /**
- * Генерирует axios вызов
+ * Генерирует моковое значение для поля
  */
-function generateAxiosCall(method, withAuth, withBody, configVar = 'configHeaders', use404Id = false) {
-    const axiosMethod = method.httpMethod.toLowerCase();
-    const pathParams = extractPathParams(method.path);
-    let params = 'buildUrl(';
-    if (pathParams.length > 0) {
-        if (use404Id) {
-            params += '{ ' + pathParams.map(p => `${p}: 999999999`).join(', ') + ' }';
-        }
-        else {
-            params += '{ ' + pathParams.map(p => `${p}: 1`).join(', ') + ' }';
-        }
+function generateMockValue(field) {
+    // Если есть enum значения
+    if (field.enumValues && field.enumValues.length > 0) {
+        return `'${field.enumValues[0]}'`;
     }
-    params += ')';
-    if (axiosMethod === 'get' || axiosMethod === 'delete') {
-        if (withAuth) {
-            return `axios.${axiosMethod}(${params}, ${configVar})`;
+    // Определяем тип
+    const type = field.type.toLowerCase();
+    if (type.includes('string')) {
+        if (field.name.toLowerCase().includes('email')) {
+            return field.isArray ? "['test@example.com']" : "'test@example.com'";
         }
-        else {
-            return `axios.${axiosMethod}(${params})`;
+        if (field.name.toLowerCase().includes('name')) {
+            return field.isArray ? "['Test Name']" : "'Test Name'";
         }
+        if (field.name.toLowerCase().includes('url')) {
+            return field.isArray ? "['https://example.com']" : "'https://example.com'";
+        }
+        return field.isArray ? "['test']" : "'test'";
     }
-    else {
-        // POST, PUT, PATCH
-        const body = withBody ? '{ /* TODO: заполнить тестовыми данными */ }' : '{}';
-        if (withAuth) {
-            return `axios.${axiosMethod}(${params}, ${body}, ${configVar})`;
+    if (type.includes('number') || type.includes('integer')) {
+        if (field.name.toLowerCase().includes('id')) {
+            return field.isArray ? '[1]' : '1';
         }
-        else {
-            return `axios.${axiosMethod}(${params}, ${body})`;
-        }
+        return field.isArray ? '[100]' : '100';
     }
+    if (type.includes('boolean') || type.includes('bool')) {
+        return field.isArray ? '[true]' : 'true';
+    }
+    if (type.includes('date')) {
+        return field.isArray ? "['2024-01-01']" : "'2024-01-01'";
+    }
+    // По умолчанию
+    return field.isArray ? '[]' : 'null';
 }
 /**
- * Генерирует axios вызов с неправильным методом
+ * Генерирует комбинации необязательных полей для pairwise тестов
  */
-function generateAxiosCallWrongMethod(method, wrongMethod) {
-    const axiosMethod = wrongMethod.toLowerCase();
-    const pathParams = extractPathParams(method.path);
-    let params = 'buildUrl(';
-    if (pathParams.length > 0) {
-        params += '{ ' + pathParams.map(p => `${p}: 1`).join(', ') + ' }';
+function generateOptionalFieldsCombinations(optionalFields) {
+    const combinations = [];
+    const maxCombinations = Math.min(10, optionalFields.length + 1);
+    // Комбинация 1: без необязательных полей (уже есть в requiredFieldsOnly)
+    // Комбинация 2: с одним необязательным полем
+    if (optionalFields.length > 0) {
+        combinations.push([optionalFields[0]]);
     }
-    params += ')';
-    if (axiosMethod === 'get' || axiosMethod === 'delete') {
-        return `axios.${axiosMethod}(${params}, configHeaders)`;
+    // Комбинация 3: с двумя необязательными полями
+    if (optionalFields.length > 1) {
+        combinations.push([optionalFields[0], optionalFields[1]]);
     }
-    else {
-        return `axios.${axiosMethod}(${params}, {}, configHeaders)`;
+    // Комбинация 4: с тремя необязательными полями
+    if (optionalFields.length > 2) {
+        combinations.push([optionalFields[0], optionalFields[1], optionalFields[2]]);
     }
-}
-/**
- * Генерирует моковые параметры для вызова метода
- */
-function generateMockParameters(method) {
-    if (method.parameters.length === 0) {
-        return '';
+    // Комбинация 5: с половиной необязательных полей
+    if (optionalFields.length > 3) {
+        const halfCount = Math.floor(optionalFields.length / 2);
+        combinations.push(optionalFields.slice(0, halfCount));
     }
-    return method.parameters.map(param => {
-        // Определяем тип параметра по имени
-        if (param === 'body' || param === 'data') {
-            return '{ /* TODO: заполнить тестовыми данными */ }';
-        }
-        else if (param.toLowerCase().includes('id')) {
-            return '1';
-        }
-        else if (param.toLowerCase().includes('name')) {
-            return "'test'";
-        }
-        else if (param.toLowerCase().includes('status')) {
-            return "'active'";
-        }
-        else {
-            return `'${param}_value'`;
-        }
-    }).join(', ');
-}
-/**
- * Генерирует невалидные параметры
- */
-function generateInvalidParameters(method) {
-    if (method.parameters.length === 0) {
-        return '';
+    // Комбинация 6: со всеми необязательными полями (кроме одного)
+    if (optionalFields.length > 4) {
+        combinations.push(optionalFields.slice(0, -1));
     }
-    return method.parameters.map(param => {
-        if (param === 'body' || param === 'data') {
-            return '{}'; // Пустой объект
-        }
-        else if (param.toLowerCase().includes('id')) {
-            return '-1'; // Невалидный ID
-        }
-        else {
-            return "''"; // Пустая строка
-        }
-    }).join(', ');
-}
-/**
- * Генерирует параметры для 404 ошибки
- */
-function generateNotFoundParameters(method) {
-    if (method.parameters.length === 0) {
-        return '';
+    // Дополнительные комбинации если полей много
+    if (optionalFields.length > 5) {
+        // Каждое второе поле
+        const everySecond = optionalFields.filter((_, index) => index % 2 === 0);
+        combinations.push(everySecond);
     }
-    return method.parameters.map(param => {
-        if (param.toLowerCase().includes('id')) {
-            return '999999999'; // Несуществующий ID
-        }
-        else if (param === 'body' || param === 'data') {
-            return '{ /* данные */ }';
-        }
-        else {
-            return `'${param}_value'`;
-        }
-    }).join(', ');
-}
-/**
- * Вычисляет относительный путь для импорта
- */
-function getRelativeImportPath(apiFilePath, outputDir, filename) {
-    const apiDir = path.dirname(apiFilePath);
-    const apiFileName = path.basename(apiFilePath, '.ts');
-    const relativePath = path.relative(outputDir, apiDir);
-    const importPath = path.join(relativePath, filename || apiFileName).replace(/\\/g, '/');
-    return importPath.startsWith('.') ? importPath : './' + importPath;
+    if (optionalFields.length > 7) {
+        // Каждое третье поле
+        const everyThird = optionalFields.filter((_, index) => index % 3 === 0);
+        combinations.push(everyThird);
+    }
+    return combinations.slice(0, maxCombinations);
 }
 //# sourceMappingURL=test-generator.js.map

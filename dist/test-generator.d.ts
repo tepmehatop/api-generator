@@ -11,6 +11,14 @@ export interface ApiTestConfig {
      */
     outputDir: string;
     /**
+     * Путь к baseTest фикстуре (например, ../../../fixtures/baseTest)
+     */
+    baseTestPath?: string;
+    /**
+     * Путь к axiosHelpers (например, ../../../helpers/axiosHelpers)
+     */
+    axiosHelpersPath?: string;
+    /**
      * Генерировать тесты для негативных сценариев (401, 403, 400, 405)
      * @default true
      */
@@ -20,6 +28,11 @@ export interface ApiTestConfig {
      * @default true
      */
     generatePositiveTests?: boolean;
+    /**
+     * Генерировать pairwise тесты (комбинаторное покрытие)
+     * @default false
+     */
+    generatePairwiseTests?: boolean;
 }
 /**
  * Генерирует API тесты из файла с методами
