@@ -19,6 +19,10 @@ export interface ApiTestConfig {
      */
     axiosHelpersPath?: string;
     /**
+     * Путь к apiTestHelper (например, ../../../helpers/apiTestHelper)
+     */
+    apiTestHelperPath?: string;
+    /**
      * Генерировать тесты для негативных сценариев (401, 403, 400, 405)
      * @default true
      */

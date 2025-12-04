@@ -49,6 +49,7 @@ async function generateApiTests(config) {
         generatePairwiseTests: false,
         baseTestPath: '../../../fixtures/baseTest',
         axiosHelpersPath: '../../../helpers/axiosHelpers',
+        apiTestHelperPath: '../../../helpers/apiTestHelper',
         ...config
     };
     console.log('🧪 Начинаю генерацию API тестов...');
@@ -212,6 +213,7 @@ function generateTestForMethod(method, config) {
     lines.push(`import test, { expect } from '${config.baseTestPath}';`);
     lines.push("import axios from 'axios';");
     lines.push(`import { configApiHeaderAdmin, configApiHeaderNoRights } from '${config.axiosHelpersPath}';`);
+    lines.push(`import { getMessageFromResponse, getMessageFromError } from '${config.apiTestHelperPath || '../../../helpers/apiTestHelper'}';`);
     lines.push('');
     // Извлекаем ID параметры из пути
     const pathParams = extractPathParams(method.path);
@@ -380,94 +382,140 @@ function generateTestForMethod(method, config) {
         }
     }
     // Позитивные тесты
-    if (config.generatePositiveTests && method.bodySchema) {
+    if (config.generatePositiveTests) {
         lines.push('');
         lines.push('  // ============================================');
         lines.push('  // ПОЗИТИВНЫЕ ТЕСТЫ');
         lines.push('  // ============================================');
         lines.push('');
-        // Генерируем тестовые данные
-        const testDataSection = generateTestDataSection(method.bodySchema);
-        lines.push(testDataSection);
-        lines.push('');
-        // Тест 1: Только обязательные поля
-        lines.push(`  test(\`\${httpMethod} с обязательными полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
-        lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, requiredFieldsOnly, configApiHeaderAdmin);');
-        lines.push('');
-        lines.push('    await expect(response.status).toBe(success);');
-        lines.push('    await expect(response.data).toBeDefined();');
-        lines.push('    // TODO: Добавить проверки обязательных полей в response');
-        lines.push('  });');
-        lines.push('');
-        // Тест 2: Все поля
-        lines.push(`  test(\`\${httpMethod} со всеми полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
-        lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, allFieldsFilled, configApiHeaderAdmin);');
-        lines.push('');
-        lines.push('    await expect(response.status).toBe(success);');
-        lines.push('    await expect(response.data).toBeDefined();');
-        lines.push('    // TODO: Добавить проверки всех полей в response');
-        lines.push('  });');
-        lines.push('');
-    }
-    else if (config.generatePositiveTests && !hasBodyParam(method)) {
-        // Для GET/DELETE без body
-        lines.push('');
-        lines.push('  // ============================================');
-        lines.push('  // ПОЗИТИВНЫЕ ТЕСТЫ');
-        lines.push('  // ============================================');
-        lines.push('');
-        lines.push(`  test(\`\${httpMethod} успешный запрос (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
-        const axiosCallSuccess = generateSimpleAxiosCall(method, true);
-        lines.push(`    const response = await ${axiosCallSuccess};`);
-        lines.push('');
-        lines.push('    await expect(response.status).toBe(success);');
-        lines.push('    await expect(response.data).toBeDefined();');
-        lines.push('  });');
-        lines.push('');
+        if (method.bodySchema && method.bodySchema.fields.length > 0) {
+            // Генерируем тестовые данные
+            const testDataSection = generateTestDataSection(method.bodySchema);
+            lines.push(testDataSection);
+            lines.push('');
+            const requiredFields = method.bodySchema.fields.filter(f => f.required);
+            const hasRequiredFields = requiredFields.length > 0;
+            if (hasRequiredFields) {
+                // Тест 1: Только обязательные поля
+                lines.push(`  test(\`\${httpMethod} с обязательными полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+                lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, requiredFieldsOnly, configApiHeaderAdmin);');
+                lines.push('');
+                lines.push('    await expect(response.status).toBe(success);');
+                lines.push('    await expect(response.data).toBeDefined();');
+                lines.push('    // TODO: Добавить проверки обязательных полей в response');
+                lines.push('  });');
+                lines.push('');
+            }
+            else {
+                lines.push('  // У данного endpoint нет обязательных полей, поэтому тест с обязательными полями не будет создан');
+                lines.push('');
+            }
+            // Тест 2: Все поля (всегда создаем если есть хоть какие-то поля)
+            lines.push(`  test(\`\${httpMethod} со всеми полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+            lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, allFieldsFilled, configApiHeaderAdmin);');
+            lines.push('');
+            lines.push('    await expect(response.status).toBe(success);');
+            lines.push('    await expect(response.data).toBeDefined();');
+            lines.push('    // TODO: Добавить проверки всех полей в response');
+            lines.push('  });');
+            lines.push('');
+        }
+        else if (hasBodyParam(method)) {
+            // Есть body параметр, но нет DTO - создаем базовый тест с пустым объектом
+            lines.push('  // DTO для данного метода не найдено, создаем базовый позитивный тест');
+            lines.push('');
+            lines.push(`  test(\`\${httpMethod} успешный запрос (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+            lines.push('    const testData = {}; // TODO: заполнить актуальными данными');
+            lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, testData, configApiHeaderAdmin);');
+            lines.push('');
+            lines.push('    await expect(response.status).toBe(success);');
+            lines.push('    await expect(response.data).toBeDefined();');
+            lines.push('  });');
+            lines.push('');
+        }
+        else {
+            // Для GET/DELETE без body
+            lines.push(`  test(\`\${httpMethod} успешный запрос (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+            const axiosCallSuccess = generateSimpleAxiosCall(method, true);
+            lines.push(`    const response = await ${axiosCallSuccess};`);
+            lines.push('');
+            lines.push('    await expect(response.status).toBe(success);');
+            lines.push('    await expect(response.data).toBeDefined();');
+            lines.push('  });');
+            lines.push('');
+        }
     }
     // Pairwise тесты
-    if (config.generatePairwiseTests && method.bodySchema) {
+    if (config.generatePairwiseTests) {
         lines.push('');
         lines.push('  // ============================================');
         lines.push('  // PAIRWISE ТЕСТЫ');
         lines.push('  // ============================================');
         lines.push('');
-        // Генерируем pairwise тестовые данные
-        const pairwiseDataSection = generatePairwiseTestDataSection(method.bodySchema);
-        lines.push(pairwiseDataSection);
-        lines.push('');
-        // Тип 1: Комбинации необязательных полей
-        const optionalFields = method.bodySchema.fields.filter(f => !f.required);
-        if (optionalFields.length > 0) {
-            lines.push('  // Тип 1: Комбинации необязательных полей');
+        if (method.bodySchema && method.bodySchema.fields.length > 0) {
+            // Генерируем pairwise тестовые данные
+            const pairwiseDataSection = generatePairwiseTestDataSection(method.bodySchema);
+            lines.push(pairwiseDataSection);
             lines.push('');
-            const combinations = generateOptionalFieldsCombinations(optionalFields);
-            combinations.forEach((combo, index) => {
-                lines.push(`  test(\`\${httpMethod} pairwise комбинация ${index + 1} (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
-                lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseCombo${index + 1}, configApiHeaderAdmin);`);
+            const requiredFields = method.bodySchema.fields.filter(f => f.required);
+            const optionalFields = method.bodySchema.fields.filter(f => !f.required);
+            const enumFields = method.bodySchema.fields.filter(f => f.enumValues && f.enumValues.length > 0);
+            // Тип 1: Комбинации необязательных полей
+            if (optionalFields.length > 0) {
+                lines.push('  // Тип 1: Комбинации необязательных полей');
                 lines.push('');
-                lines.push('    await expect(response.status).toBe(success);');
-                lines.push('    await expect(response.data).toBeDefined();');
-                lines.push('  });');
-                lines.push('');
-            });
-        }
-        // Тип 2: Различные значения enum полей
-        const enumFields = method.bodySchema.fields.filter(f => f.enumValues && f.enumValues.length > 0);
-        if (enumFields.length > 0) {
-            lines.push('  // Тип 2: Различные значения enum полей');
-            lines.push('');
-            enumFields.forEach(field => {
-                field.enumValues?.forEach((enumValue, index) => {
-                    lines.push(`  test(\`\${httpMethod} с ${field.name}='${enumValue}' (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
-                    lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseEnum_${field.name}_${index + 1}, configApiHeaderAdmin);`);
+                const combinations = generateOptionalFieldsCombinations(optionalFields);
+                combinations.forEach((combo, index) => {
+                    lines.push(`  test(\`\${httpMethod} pairwise комбинация ${index + 1} (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+                    lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseCombo${index + 1}, configApiHeaderAdmin);`);
                     lines.push('');
                     lines.push('    await expect(response.status).toBe(success);');
                     lines.push('    await expect(response.data).toBeDefined();');
                     lines.push('  });');
                     lines.push('');
                 });
-            });
+            }
+            else if (requiredFields.length === 0) {
+                lines.push('  // У данного endpoint нет необязательных полей для pairwise комбинаций');
+                lines.push('');
+            }
+            // Тип 2: Различные значения enum полей
+            if (enumFields.length > 0) {
+                lines.push('  // Тип 2: Различные значения enum полей');
+                lines.push('');
+                enumFields.forEach(field => {
+                    field.enumValues?.forEach((enumValue, index) => {
+                        lines.push(`  test(\`\${httpMethod} с ${field.name}='${enumValue}' (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+                        lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseEnum_${field.name}_${index + 1}, configApiHeaderAdmin);`);
+                        lines.push('');
+                        lines.push('    await expect(response.status).toBe(success);');
+                        lines.push('    await expect(response.data).toBeDefined();');
+                        lines.push('  });');
+                        lines.push('');
+                    });
+                });
+            }
+            else if (optionalFields.length === 0) {
+                lines.push('  // У данного endpoint нет enum полей для pairwise тестов');
+                lines.push('');
+            }
+        }
+        else {
+            // Нет DTO - создаем базовые pairwise тесты
+            lines.push('  // DTO для данного метода не найдено');
+            lines.push('  // Создаем базовые pairwise тесты с различными наборами данных');
+            lines.push('');
+            // Генерируем несколько вариантов с разными данными
+            for (let i = 1; i <= 3; i++) {
+                lines.push(`  test(\`\${httpMethod} pairwise вариант ${i} (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+                lines.push(`    const testData = {}; // TODO: заполнить вариант ${i} данных`);
+                lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, testData, configApiHeaderAdmin);');
+                lines.push('');
+                lines.push('    await expect(response.status).toBe(success);');
+                lines.push('    await expect(response.data).toBeDefined();');
+                lines.push('  });');
+                lines.push('');
+            }
         }
     }
     lines.push('});');
@@ -538,32 +586,73 @@ function hasBodyParam(method) {
         ['POST', 'PUT', 'PATCH'].includes(method.httpMethod);
 }
 /**
+ * Генерирует блок проверок для негативного теста с кастомными сообщениями
+ */
+function generateNegativeTestChecks(method, expectedStatus, checkUrl = true) {
+    const lines = [];
+    lines.push(`      await expect(error.response.status, getMessageFromError(error)).toBe(${expectedStatus});`);
+    lines.push('      await expect(error.response.statusText).toBe("' + getStatusText(expectedStatus) + '");');
+    lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
+    lines.push(`      await expect(error.config.method).toBe('${method.httpMethod.toLowerCase()}');`);
+    if (checkUrl) {
+        lines.push('      await expect(error.config.url).toContain(endpoint);');
+    }
+    return lines;
+}
+/**
+ * Генерирует блок проверок для позитивного теста с кастомными сообщениями
+ */
+function generatePositiveTestChecks(successCode) {
+    const lines = [];
+    lines.push(`    await expect(response.status, getMessageFromResponse(response)).toBe(${successCode});`);
+    lines.push('    await expect(response.data).toBeDefined();');
+    return lines;
+}
+/**
+ * Возвращает текст статуса по коду
+ */
+function getStatusText(statusCode) {
+    const statusTexts = {
+        'unauthorized': 'Unauthorized',
+        'badRequest': 'Bad Request',
+        'forbidden': 'Forbidden',
+        'notFound': 'Not Found',
+        'methodNotAllowed': 'Method Not Allowed',
+    };
+    return statusTexts[statusCode] || 'Error';
+}
+/**
  * Генерирует секцию с тестовыми данными
  */
 function generateTestDataSection(schema) {
     const lines = [];
     lines.push('  // Тестовые данные для позитивных тестов');
     lines.push('');
-    // Только обязательные поля
-    lines.push('  // Объект с только обязательными полями');
-    lines.push('  const requiredFieldsOnly = {');
     const requiredFields = schema.fields.filter(f => f.required);
-    requiredFields.forEach((field, index) => {
-        const value = generateMockValue(field);
-        const comma = index < requiredFields.length - 1 ? ',' : '';
-        lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
-    });
-    lines.push('  };');
-    lines.push('');
+    const hasRequiredFields = requiredFields.length > 0;
+    // Только обязательные поля (если есть)
+    if (hasRequiredFields) {
+        lines.push('  // Объект с только обязательными полями');
+        lines.push('  const requiredFieldsOnly = {');
+        requiredFields.forEach((field, index) => {
+            const value = generateMockValue(field);
+            const comma = index < requiredFields.length - 1 ? ',' : '';
+            lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
+        });
+        lines.push('  };');
+        lines.push('');
+    }
     // Все поля
-    lines.push('  // Объект со всеми полями');
-    lines.push('  const allFieldsFilled = {');
-    schema.fields.forEach((field, index) => {
-        const value = generateMockValue(field);
-        const comma = index < schema.fields.length - 1 ? ',' : '';
-        lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
-    });
-    lines.push('  };');
+    if (schema.fields.length > 0) {
+        lines.push('  // Объект со всеми полями');
+        lines.push('  const allFieldsFilled = {');
+        schema.fields.forEach((field, index) => {
+            const value = generateMockValue(field);
+            const comma = index < schema.fields.length - 1 ? ',' : '';
+            lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
+        });
+        lines.push('  };');
+    }
     return lines.join('\n');
 }
 /**
