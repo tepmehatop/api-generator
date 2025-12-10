@@ -122,56 +122,97 @@ class DatabaseAnalyzer {
      * Извлекает информацию из тест файла
      */
     async extractTestInfo() {
-        const content = fs.readFileSync(this.config.testFilePath, 'utf-8');
-        // Извлекаем endpoint
-        const endpointMatch = content.match(/const endpoint = ['`](.+?)['`];/);
-        const endpoint = endpointMatch ? endpointMatch[1] : '';
-        // Извлекаем HTTP метод
-        const methodMatch = content.match(/const httpMethod = ['"](.+?)['"];/);
-        const httpMethod = methodMatch ? methodMatch[1] : 'GET';
-        // Извлекаем DTO информацию
-        const dtoNameMatch = content.match(/const dtoName = ['"](.+?)['"];/);
-        const dtoName = dtoNameMatch ? dtoNameMatch[1] : undefined;
-        const dtoPathMatch = content.match(/const dtoPath = ['"](.+?)['"];/);
-        const dtoPath = dtoPathMatch ? dtoPathMatch[1] : undefined;
-        // Извлекаем существующие таблицы
-        const tablesMatch = content.match(/\/\/ @db-tables:start\s*\n.*?const dbTables.*?=.*?\[(.*?)\];/s);
-        let existingTables = [];
-        if (tablesMatch && tablesMatch[1].trim()) {
-            existingTables = tablesMatch[1]
-                .split(',')
-                .map(t => t.trim().replace(/['"]/g, ''))
-                .filter(t => t.length > 0);
+        console.log('  🔍 Читаю тест файл...');
+        try {
+            const content = fs.readFileSync(this.config.testFilePath, 'utf-8');
+            console.log(`  ✓ Файл прочитан, размер: ${content.length} символов`);
+            // Извлекаем endpoint
+            const endpointMatch = content.match(/const endpoint = ['`](.+?)['`];/);
+            const endpoint = endpointMatch ? endpointMatch[1] : '';
+            console.log(`  ✓ Endpoint: ${endpoint || 'НЕ НАЙДЕН'}`);
+            // Извлекаем HTTP метод
+            const methodMatch = content.match(/const httpMethod = ['"](.+?)['"];/);
+            const httpMethod = methodMatch ? methodMatch[1] : 'GET';
+            console.log(`  ✓ HTTP Method: ${httpMethod}`);
+            // Извлекаем DTO информацию
+            const dtoNameMatch = content.match(/const dtoName = ['"](.+?)['"];/);
+            const dtoName = dtoNameMatch ? dtoNameMatch[1] : undefined;
+            console.log(`  ✓ DTO Name: ${dtoName || 'НЕ НАЙДЕНО'}`);
+            const dtoPathMatch = content.match(/const dtoPath = ['"](.+?)['"];/);
+            const dtoPath = dtoPathMatch ? dtoPathMatch[1] : undefined;
+            console.log(`  ✓ DTO Path: ${dtoPath || 'НЕ НАЙДЕНО'}`);
+            // Извлекаем существующие таблицы
+            const tablesMatch = content.match(/\/\/ @db-tables:start\s*\n.*?const dbTables.*?=.*?\[(.*?)\];/s);
+            let existingTables = [];
+            if (tablesMatch && tablesMatch[1].trim()) {
+                existingTables = tablesMatch[1]
+                    .split(',')
+                    .map(t => t.trim().replace(/['"]/g, ''))
+                    .filter(t => t.length > 0);
+                console.log(`  ✓ Существующие таблицы: ${existingTables.join(', ')}`);
+            }
+            else {
+                console.log(`  ℹ️  Таблицы еще не определены`);
+            }
+            return {
+                endpoint,
+                httpMethod,
+                dtoName,
+                dtoPath,
+                existingTables
+            };
         }
-        return {
-            endpoint,
-            httpMethod,
-            dtoName,
-            dtoPath,
-            existingTables
-        };
+        catch (error) {
+            console.error(`  ❌ Ошибка при чтении теста: ${error.message}`);
+            throw error;
+        }
     }
     /**
      * Извлекает поля из DTO
      */
     async extractDTOFields(dtoPath, dtoName) {
-        const content = fs.readFileSync(dtoPath, 'utf-8');
-        // Ищем интерфейс
-        const interfaceRegex = new RegExp(`export\\s+interface\\s+${dtoName}\\s*{([^}]+)}`, 's');
-        const match = content.match(interfaceRegex);
-        if (!match)
-            return [];
-        const interfaceBody = match[1];
-        const fields = [];
-        // Парсим поля
-        const lines = interfaceBody.split('\n');
-        for (const line of lines) {
-            const fieldMatch = line.match(/^\s*['"]?(\w+)['"]?\??:/);
-            if (fieldMatch) {
-                fields.push(fieldMatch[1]);
+        console.log(`  🔍 Читаю DTO из ${dtoPath}...`);
+        try {
+            // Проверяем существование файла
+            if (!fs.existsSync(dtoPath)) {
+                console.error(`  ❌ Файл не найден: ${dtoPath}`);
+                return [];
             }
+            const content = fs.readFileSync(dtoPath, 'utf-8');
+            console.log(`  ✓ Файл прочитан, размер: ${content.length} символов`);
+            // Ищем интерфейс или type
+            const interfaceRegex = new RegExp(`export\\s+(?:interface|type)\\s+${dtoName}\\s*[={]([^}]+)}`, 's');
+            const match = content.match(interfaceRegex);
+            if (!match) {
+                console.error(`  ❌ DTO '${dtoName}' не найдено в файле`);
+                console.log(`  💡 Ищу варианты в файле...`);
+                // Показываем какие интерфейсы есть
+                const allInterfaces = content.match(/export\s+(?:interface|type)\s+(\w+)/g);
+                if (allInterfaces) {
+                    console.log(`  📋 Найденные типы в файле:`);
+                    allInterfaces.slice(0, 10).forEach(i => console.log(`      - ${i}`));
+                }
+                return [];
+            }
+            const interfaceBody = match[1];
+            const fields = [];
+            console.log(`  ✓ DTO найдено, парсим поля...`);
+            // Парсим поля
+            const lines = interfaceBody.split('\n');
+            for (const line of lines) {
+                const fieldMatch = line.match(/^\s*['"]?(\w+)['"]?\??:/);
+                if (fieldMatch) {
+                    fields.push(fieldMatch[1]);
+                }
+            }
+            console.log(`  ✓ Извлечено полей: ${fields.length}`);
+            fields.forEach(f => console.log(`      - ${f}`));
+            return fields;
         }
-        return fields;
+        catch (error) {
+            console.error(`  ❌ Ошибка при чтении DTO: ${error.message}`);
+            return [];
+        }
     }
     /**
      * ЭТАП 1: Находит таблицы по полям DTO
@@ -181,54 +222,75 @@ class DatabaseAnalyzer {
             console.log('⚠️  Поля DTO не найдены, пропускаю schema analysis');
             return [];
         }
+        console.log(`  🔍 Ищу таблицы для полей: ${dtoFields.join(', ')}`);
         // Получаем все таблицы и колонки
-        const result = await this.dbConnect `
-      SELECT 
-        table_name,
-        column_name,
-        data_type,
-        is_nullable
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-      ORDER BY table_name, ordinal_position
-    `;
-        // Группируем по таблицам
-        const tableColumns = new Map();
-        for (const row of result) {
-            if (!tableColumns.has(row.table_name)) {
-                tableColumns.set(row.table_name, []);
-            }
-            tableColumns.get(row.table_name).push({
-                name: row.column_name,
-                type: row.data_type,
-                nullable: row.is_nullable === 'YES',
-            });
-        }
-        // Подсчитываем совпадения
-        const scores = [];
-        for (const [tableName, columns] of tableColumns.entries()) {
-            let matchCount = 0;
-            for (const dtoField of dtoFields) {
-                // Генерируем варианты имени поля
-                const variants = this.generateFieldVariants(dtoField);
-                if (columns.some(col => variants.includes(col.name))) {
-                    matchCount++;
+        try {
+            const result = await this.dbConnect `
+        SELECT 
+          table_name,
+          column_name,
+          data_type,
+          is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+        ORDER BY table_name, ordinal_position
+      `;
+            console.log(`  ✓ Получено ${result.length} колонок из БД`);
+            // Группируем по таблицам
+            const tableColumns = new Map();
+            for (const row of result) {
+                if (!tableColumns.has(row.table_name)) {
+                    tableColumns.set(row.table_name, []);
                 }
-            }
-            if (matchCount > 0) {
-                const confidence = matchCount / dtoFields.length;
-                scores.push({
-                    name: tableName,
-                    columns,
-                    foreignKeys: [], // Заполним позже
-                    confidence
+                tableColumns.get(row.table_name).push({
+                    name: row.column_name,
+                    type: row.data_type,
+                    nullable: row.is_nullable === 'YES',
                 });
             }
+            console.log(`  ✓ Найдено ${tableColumns.size} таблиц в БД`);
+            // Подсчитываем совпадения
+            const scores = [];
+            for (const [tableName, columns] of tableColumns.entries()) {
+                let matchCount = 0;
+                const matchedFields = [];
+                for (const dtoField of dtoFields) {
+                    // Генерируем варианты имени поля
+                    const variants = this.generateFieldVariants(dtoField);
+                    const matchedColumn = columns.find(col => variants.includes(col.name));
+                    if (matchedColumn) {
+                        matchCount++;
+                        matchedFields.push(`${dtoField} → ${matchedColumn.name}`);
+                    }
+                }
+                if (matchCount > 0) {
+                    const confidence = matchCount / dtoFields.length;
+                    console.log(`  📊 ${tableName}: ${matchCount}/${dtoFields.length} совпадений (${(confidence * 100).toFixed(0)}%)`);
+                    matchedFields.forEach(m => console.log(`      ${m}`));
+                    scores.push({
+                        name: tableName,
+                        columns,
+                        foreignKeys: [], // Заполним позже
+                        confidence
+                    });
+                }
+            }
+            if (scores.length === 0) {
+                console.log('  ⚠️  Совпадений не найдено. Проверьте naming convention.');
+                console.log('  💡 Пример вариантов для поля "customerId":');
+                const exampleVariants = this.generateFieldVariants('customerId');
+                exampleVariants.forEach(v => console.log(`      - ${v}`));
+            }
+            // Сортируем по confidence и возвращаем топ-10
+            return scores
+                .sort((a, b) => b.confidence - a.confidence)
+                .slice(0, 10);
         }
-        // Сортируем по confidence и возвращаем топ-10
-        return scores
-            .sort((a, b) => b.confidence - a.confidence)
-            .slice(0, 10);
+        catch (error) {
+            console.error(`  ❌ Ошибка при чтении схемы БД: ${error.message}`);
+            console.error(`  Stack: ${error.stack}`);
+            return [];
+        }
     }
     /**
      * Генерирует варианты имени поля (camelCase, snake_case, etc)

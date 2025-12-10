@@ -55,8 +55,8 @@ async function generateApiTests(config) {
     console.log('🧪 Начинаю генерацию API тестов...');
     // Читаем файл с API методами
     const apiFileContent = fs.readFileSync(fullConfig.apiFilePath, 'utf-8');
-    // Извлекаем информацию о методах
-    const methods = extractMethodsFromFile(apiFileContent);
+    // Извлекаем информацию о методах (передаем путь для поиска base.types.ts)
+    const methods = extractMethodsFromFile(apiFileContent, fullConfig.apiFilePath);
     console.log(`✓ Найдено методов: ${methods.length}`);
     // Проверяем что у всех методов есть path
     const methodsWithoutPath = methods.filter(m => !m.path || m.path.trim() === '');
@@ -115,10 +115,55 @@ async function generateApiTests(config) {
 /**
  * Извлекает информацию о методах из файла
  */
-function extractMethodsFromFile(content) {
+function extractMethodsFromFile(content, filePath) {
     const methods = [];
-    // Сначала извлекаем все DTO из файла
+    // Сначала извлекаем все DTO из текущего файла
     const dtoSchemas = extractDTOSchemas(content);
+    // Если есть путь к файлу, ищем base.types.ts и импорты
+    const externalSchemas = new Map();
+    if (filePath) {
+        const dir = path.dirname(filePath);
+        // Проверяем base.types.ts
+        const baseTypesPath = path.join(dir, 'base.types.ts');
+        if (fs.existsSync(baseTypesPath)) {
+            console.log(`  📦 Найден base.types.ts, извлекаю DTO...`);
+            const baseContent = fs.readFileSync(baseTypesPath, 'utf-8');
+            const baseSchemas = extractDTOSchemas(baseContent);
+            baseSchemas.forEach(schema => externalSchemas.set(schema.name, schema));
+            console.log(`  ✓ Извлечено ${baseSchemas.length} DTO из base.types.ts`);
+        }
+        // Ищем импорты типов
+        const importRegex = /import\s+(?:type\s+)?{([^}]+)}\s+from\s+['"](.+?)['"]/g;
+        let importMatch;
+        while ((importMatch = importRegex.exec(content)) !== null) {
+            const imports = importMatch[1].split(',').map(i => i.trim());
+            const importPath = importMatch[2];
+            // Разрешаем относительный путь
+            let resolvedPath = importPath;
+            if (importPath.startsWith('./') || importPath.startsWith('../')) {
+                resolvedPath = path.resolve(dir, importPath);
+                // Добавляем .ts если нет расширения
+                if (!resolvedPath.endsWith('.ts')) {
+                    resolvedPath += '.ts';
+                }
+            }
+            if (fs.existsSync(resolvedPath)) {
+                console.log(`  📦 Читаю импорты из ${importPath}...`);
+                const importedContent = fs.readFileSync(resolvedPath, 'utf-8');
+                const importedSchemas = extractDTOSchemas(importedContent);
+                // Добавляем только импортированные типы
+                importedSchemas.forEach(schema => {
+                    if (imports.some(imp => imp.includes(schema.name))) {
+                        externalSchemas.set(schema.name, schema);
+                    }
+                });
+                console.log(`  ✓ Извлечено ${importedSchemas.length} DTO из ${importPath}`);
+            }
+        }
+    }
+    // Объединяем все схемы
+    const allSchemas = [...dtoSchemas, ...Array.from(externalSchemas.values())];
+    console.log(`  📊 Всего доступно DTO: ${allSchemas.length}`);
     // Регулярка для поиска JSDoc + функции
     const methodRegex = /\/\*\*[\s\S]*?\*\/\s*export\s+async\s+function\s+(\w+)\s*\((.*?)\)\s*:\s*Promise<(.+?)>\s*{/g;
     let match;
@@ -150,11 +195,29 @@ function extractMethodsFromFile(content) {
         });
         // Находим body параметр и его тип
         let bodySchema;
+        let dtoSourcePath;
         if (params.includes('body:') || params.includes('data:')) {
             const bodyMatch = params.match(/(?:body|data):\s*(\w+)/);
             if (bodyMatch) {
                 const bodyTypeName = bodyMatch[1];
-                bodySchema = dtoSchemas.find(dto => dto.name === bodyTypeName);
+                // Ищем DTO во всех доступных схемах
+                bodySchema = allSchemas.find(dto => dto.name === bodyTypeName);
+                // Определяем откуда DTO
+                if (bodySchema) {
+                    if (externalSchemas.has(bodyTypeName)) {
+                        // Ищем в импортах
+                        const importMatch = content.match(new RegExp(`import\\s+(?:type\\s+)?{[^}]*${bodyTypeName}[^}]*}\\s+from\\s+['"](.+?)['"]`));
+                        dtoSourcePath = importMatch ? importMatch[1] : './base.types.ts';
+                    }
+                    else {
+                        // Текущий файл
+                        dtoSourcePath = filePath || 'current_file';
+                    }
+                    console.log(`  ✓ ${methodName}: найдено DTO '${bodyTypeName}' в ${dtoSourcePath}`);
+                }
+                else {
+                    console.warn(`  ⚠️  ${methodName}: DTO '${bodyTypeName}' не найдено`);
+                }
             }
         }
         methods.push({
@@ -165,7 +228,8 @@ function extractMethodsFromFile(content) {
             returnType,
             tags,
             hasAuth,
-            bodySchema
+            bodySchema,
+            dtoSourcePath
         });
     }
     return methods;
@@ -270,7 +334,9 @@ function generateTestForMethod(method, config) {
     if (method.bodySchema) {
         lines.push('// DTO информация');
         lines.push(`const dtoName = '${method.bodySchema.name}';`);
-        lines.push(`const dtoPath = '${config.apiFilePath}';`);
+        // Используем dtoSourcePath если есть, иначе текущий файл
+        const dtoPath = method.dtoSourcePath || config.apiFilePath;
+        lines.push(`const dtoPath = '${dtoPath}';`);
         lines.push('');
     }
     // Добавляем placeholder для таблиц БД (будет заполнен анализатором)
