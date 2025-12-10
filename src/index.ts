@@ -96,6 +96,15 @@ export class ApiGenerator {
     try {
       console.log('🚀 Начинаю генерацию API клиента...');
       
+      // 0. Очистка выходной папки
+      if (fs.existsSync(this.config.outputDir)) {
+        console.log(`🧹 Очищаю папку ${this.config.outputDir}...`);
+        fs.rmSync(this.config.outputDir, { recursive: true, force: true });
+      }
+      
+      // Создаем выходную папку заново
+      fs.mkdirSync(this.config.outputDir, { recursive: true });
+      
       // 1. Загрузка OpenAPI спецификации
       const spec = await this.loadSpec();
       console.log('✓ OpenAPI спецификация загружена');

@@ -112,22 +112,54 @@ export async function generateApiTests(config: ApiTestConfig): Promise<void> {
   
   // Генерируем тест для каждого метода
   let generatedCount = 0;
+  let skippedCount = 0;
+  let updatedCount = 0;
+  
   for (const method of methods) {
     if (!method.path || method.path.trim() === '') {
       console.warn(`⚠️  Пропускаю ${method.name} - endpoint не найден`);
       continue;
     }
     
-    const testContent = generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
     const testFileName = generateTestFileName(method);
     const testFilePath = path.join(fullConfig.outputDir, testFileName);
     
-    fs.writeFileSync(testFilePath, testContent);
-    console.log(`  → ${testFileName}`);
-    generatedCount++;
+    // Проверяем существует ли файл
+    if (fs.existsSync(testFilePath)) {
+      const existingContent = fs.readFileSync(testFilePath, 'utf-8');
+      
+      // Проверяем тег исключения на весь файл
+      if (hasReadOnlyTag(existingContent)) {
+        console.log(`  ⏭️  ${testFileName} (пропущен - помечен как ReadOnly)`);
+        skippedCount++;
+        continue;
+      }
+      
+      // Извлекаем protected области
+      const protectedAreas = extractProtectedAreas(existingContent);
+      
+      // Генерируем новое содержимое
+      const newContent = generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
+      
+      // Восстанавливаем protected области
+      const finalContent = restoreProtectedAreas(newContent, protectedAreas);
+      
+      fs.writeFileSync(testFilePath, finalContent);
+      console.log(`  ♻️  ${testFileName} (обновлен)`);
+      updatedCount++;
+    } else {
+      // Новый файл
+      const testContent = generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
+      fs.writeFileSync(testFilePath, testContent);
+      console.log(`  ✅ ${testFileName} (создан)`);
+      generatedCount++;
+    }
   }
   
-  console.log(`\n✨ Генерация завершена! Создано тестов: ${generatedCount}`);
+  console.log(`\n✨ Генерация завершена!`);
+  console.log(`   Создано: ${generatedCount}`);
+  console.log(`   Обновлено: ${updatedCount}`);
+  console.log(`   Пропущено: ${skippedCount}`);
   console.log(`📁 Путь: ${fullConfig.outputDir}`);
 }
 
@@ -314,6 +346,21 @@ function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTest
   }
   
   lines.push(`const httpMethod = '${method.httpMethod}';`);
+  lines.push('');
+  
+  // Добавляем информацию о DTO
+  if (method.bodySchema) {
+    lines.push('// DTO информация');
+    lines.push(`const dtoName = '${method.bodySchema.name}';`);
+    lines.push(`const dtoPath = '${config.apiFilePath}';`);
+    lines.push('');
+  }
+  
+  // Добавляем placeholder для таблиц БД (будет заполнен анализатором)
+  lines.push('// Таблицы БД (автоматически определяется DatabaseAnalyzer)');
+  lines.push('// @db-tables:start');
+  lines.push('const dbTables: string[] = []; // Будет заполнено после анализа БД');
+  lines.push('// @db-tables:end');
   lines.push('');
   
   // Коды статусов
@@ -932,4 +979,71 @@ function generateOptionalFieldsCombinations(optionalFields: DTOField[]): DTOFiel
   }
   
   return combinations.slice(0, maxCombinations);
+}
+
+/**
+ * Проверяет есть ли тег ReadOnly на весь файл
+ */
+function hasReadOnlyTag(content: string): boolean {
+  // Ищем комментарий // @readonly или /* @readonly */ в начале файла (первые 500 символов)
+  const header = content.substring(0, 500);
+  return header.includes('@readonly') || header.includes('@read-only') || header.includes('@READONLY');
+}
+
+/**
+ * Извлекает protected области из файла
+ */
+function extractProtectedAreas(content: string): Map<string, string> {
+  const protectedAreas = new Map<string, string>();
+  
+  // Ищем блоки /* @protected:start:ID */ ... /* @protected:end:ID */
+  const protectedRegex = /\/\*\s*@protected:start:(\w+)\s*\*\/([\s\S]*?)\/\*\s*@protected:end:\1\s*\*\//g;
+  
+  let match;
+  while ((match = protectedRegex.exec(content)) !== null) {
+    const id = match[1];
+    const protectedContent = match[2];
+    protectedAreas.set(id, protectedContent);
+  }
+  
+  // Также ищем блоки // @protected:start:ID ... // @protected:end:ID
+  const protectedLineRegex = /\/\/\s*@protected:start:(\w+)\s*\n([\s\S]*?)\/\/\s*@protected:end:\1\s*\n/g;
+  
+  while ((match = protectedLineRegex.exec(content)) !== null) {
+    const id = match[1];
+    const protectedContent = match[2];
+    protectedAreas.set(id, protectedContent);
+  }
+  
+  return protectedAreas;
+}
+
+/**
+ * Восстанавливает protected области в новом контенте
+ */
+function restoreProtectedAreas(newContent: string, protectedAreas: Map<string, string>): string {
+  let result = newContent;
+  
+  // Заменяем блоки /* @protected:start:ID */ ... /* @protected:end:ID */
+  for (const [id, protectedContent] of protectedAreas.entries()) {
+    // Ищем placeholder в новом контенте
+    const placeholderMultiline = new RegExp(
+      `\\/\\*\\s*@protected:start:${id}\\s*\\*\\/[\\s\\S]*?\\/\\*\\s*@protected:end:${id}\\s*\\*\\/`,
+      'g'
+    );
+    
+    const replacement = `/* @protected:start:${id} */${protectedContent}/* @protected:end:${id} */`;
+    result = result.replace(placeholderMultiline, replacement);
+    
+    // Также обрабатываем однострочные комментарии
+    const placeholderLine = new RegExp(
+      `\\/\\/\\s*@protected:start:${id}\\s*\\n[\\s\\S]*?\\/\\/\\s*@protected:end:${id}\\s*\\n`,
+      'g'
+    );
+    
+    const replacementLine = `// @protected:start:${id}\n${protectedContent}// @protected:end:${id}\n`;
+    result = result.replace(placeholderLine, replacementLine);
+  }
+  
+  return result;
 }

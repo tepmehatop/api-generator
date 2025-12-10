@@ -451,7 +451,7 @@ class CodeGenerator {
             lines.push('      data: body,');
         }
         lines.push('    });');
-        lines.push('    return response.data;');
+        lines.push('    return response;');
         lines.push('  }');
         return lines.join('\n');
     }
@@ -685,7 +685,7 @@ class CodeGenerator {
                 lines.push('    data: body,');
             }
             lines.push('  });');
-            lines.push('  return response.data;');
+            lines.push('  return response;');
         }
         lines.push('}');
         return lines.join('\n');

@@ -557,7 +557,7 @@ export class CodeGenerator {
     }
     
     lines.push('    });');
-    lines.push('    return response.data;');
+    lines.push('    return response;');
     lines.push('  }');
     
     return lines.join('\n');
@@ -845,7 +845,7 @@ export class CodeGenerator {
       }
       
       lines.push('  });');
-      lines.push('  return response.data;');
+      lines.push('  return response;');
     }
     
     lines.push('}');
