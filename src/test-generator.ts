@@ -393,11 +393,24 @@ function generateTestFileName(method: ExtractedMethod): string {
 function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTestConfig>): string {
   const lines: string[] = [];
   
+  // Проверяем наличие файла с данными
+  const testFileName = method.name + '.test.ts';
+  const testDataDir = path.join(config.outputDir, 'testData');
+  const testDataFileName = method.name + '.data.ts';
+  const testDataFilePath = path.join(testDataDir, testDataFileName);
+  const hasTestData = fs.existsSync(testDataFilePath);
+  
   // Импорты
   lines.push(`import test, { expect } from '${config.baseTestPath}';`);
   lines.push("import axios from 'axios';");
   lines.push(`import { configApiHeaderAdmin, configApiHeaderNoRights } from '${config.axiosHelpersPath}';`);
   lines.push(`import { getMessageFromResponse, getMessageFromError } from '${config.apiTestHelperPath || '../../../helpers/apiTestHelper'}';`);
+  
+  // Добавляем импорт данных если файл существует
+  if (hasTestData) {
+    lines.push(`import { dbTestData } from './testData/${method.name}.data';`);
+  }
+  
   lines.push('');
   
   // Извлекаем ID параметры из пути
@@ -608,8 +621,11 @@ function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTest
     lines.push('');
     
     if (method.bodySchema && method.bodySchema.fields.length > 0) {
-      // Генерируем тестовые данные
-      const testDataSection = generateTestDataSection(method.bodySchema);
+      // Генерируем тестовые данные (используем dbTestData если доступно)
+      const testDataSection = generateTestDataSectionWithDb(
+        method.bodySchema,
+        hasTestData ? `./testData/${method.name}.data` : null
+      );
       lines.push(testDataSection);
       lines.push('');
       
@@ -674,8 +690,11 @@ function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTest
     lines.push('');
     
     if (method.bodySchema && method.bodySchema.fields.length > 0) {
-      // Генерируем pairwise тестовые данные
-      const pairwiseDataSection = generatePairwiseTestDataSection(method.bodySchema);
+      // Генерируем pairwise тестовые данные (используем dbTestData если доступно)
+      const pairwiseDataSection = generatePairwiseTestDataSectionWithDb(
+        method.bodySchema,
+        hasTestData ? `./testData/${method.name}.data` : null
+      );
       lines.push(pairwiseDataSection);
       lines.push('');
       
@@ -866,6 +885,103 @@ function getStatusText(statusCode: string): string {
 }
 
 /**
+ * Генерирует секцию с тестовыми данными из dbTestData
+ */
+function generateTestDataSectionWithDb(
+  schema: DTOSchema,
+  testDataFilePath: string | null
+): string {
+  const lines: string[] = [];
+  
+  lines.push('  // Тестовые данные для позитивных тестов');
+  lines.push('');
+  
+  const requiredFields = schema.fields.filter(f => f.required);
+  const hasRequiredFields = requiredFields.length > 0;
+  
+  if (testDataFilePath) {
+    // Есть данные из БД - используем их!
+    lines.push('  // Используем данные из БД');
+    
+    // Получаем случайные записи для вариативности
+    lines.push('  const dbRecords = Object.values(dbTestData).flat();');
+    lines.push('  const getRandomRecord = () => dbRecords[Math.floor(Math.random() * dbRecords.length)];');
+    lines.push('  const record1 = getRandomRecord();');
+    lines.push('  const record2 = getRandomRecord();');
+    lines.push('  const record3 = getRandomRecord();');
+    lines.push('');
+    
+    // Функция для маппинга полей
+    lines.push('  // Функция для маппинга данных из БД в DTO');
+    lines.push('  const mapToDto = (record: any, fields: string[]) => {');
+    lines.push('    const result: any = {};');
+    lines.push('    for (const field of fields) {');
+    lines.push('      // Пробуем разные варианты названий');
+    lines.push('      const snakeCase = field.replace(/([A-Z])/g, "_$1").toLowerCase();');
+    lines.push('      result[field] = record[field] ?? record[snakeCase] ?? record[field.toLowerCase()];');
+    lines.push('    }');
+    lines.push('    return result;');
+    lines.push('  };');
+    lines.push('');
+    
+    // Только обязательные поля
+    if (hasRequiredFields) {
+      lines.push('  // Объект с только обязательными полями (из БД)');
+      lines.push('  const requiredFieldsOnly = mapToDto(record1, [');
+      requiredFields.forEach((field, index) => {
+        const comma = index < requiredFields.length - 1 ? ',' : '';
+        lines.push(`    '${field.name}'${comma}`);
+      });
+      lines.push('  ]);');
+      lines.push('');
+    }
+    
+    // Все поля
+    if (schema.fields.length > 0) {
+      lines.push('  // Объект со всеми полями (из БД)');
+      lines.push('  const allFieldsFilled = mapToDto(record2, [');
+      schema.fields.forEach((field, index) => {
+        const comma = index < schema.fields.length - 1 ? ',' : '';
+        lines.push(`    '${field.name}'${comma}`);
+      });
+      lines.push('  ]);');
+    }
+  } else {
+    // Нет данных из БД - генерируем моки (старый способ)
+    lines.push('  // Данные из БД отсутствуют, используются моки');
+    lines.push('  // Запустите analyzeAndGenerateTestData для генерации реальных данных');
+    lines.push('');
+    
+    // Только обязательные поля (если есть)
+    if (hasRequiredFields) {
+      lines.push('  // Объект с только обязательными полями');
+      lines.push('  const requiredFieldsOnly = {');
+      requiredFields.forEach((field, index) => {
+        const value = generateMockValue(field);
+        const comma = index < requiredFields.length - 1 ? ',' : '';
+        lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
+      });
+      lines.push('  };');
+      lines.push('');
+    }
+    
+    // Все поля
+    if (schema.fields.length > 0) {
+      lines.push('  // Объект со всеми полями');
+      lines.push('  const allFieldsFilled = {');
+      schema.fields.forEach((field, index) => {
+        const value = generateMockValue(field);
+        const comma = index < schema.fields.length - 1 ? ',' : '';
+        lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
+      });
+      lines.push('  };');
+    }
+  }
+  
+  return lines.join('\n');
+}
+
+/**
  * Генерирует секцию с тестовыми данными
  */
 function generateTestDataSection(schema: DTOSchema): string {
@@ -900,6 +1016,95 @@ function generateTestDataSection(schema: DTOSchema): string {
       lines.push(`    ${field.name}: ${value}${comma} // TODO: заменить на актуальные данные`);
     });
     lines.push('  };');
+  }
+  
+  return lines.join('\n');
+}
+
+/**
+ * Генерирует секцию с pairwise тестовыми данными из dbTestData
+ */
+function generatePairwiseTestDataSectionWithDb(
+  schema: DTOSchema,
+  testDataFilePath: string | null
+): string {
+  const lines: string[] = [];
+  
+  lines.push('  // Тестовые данные для pairwise тестов');
+  lines.push('');
+  
+  const requiredFields = schema.fields.filter(f => f.required);
+  const optionalFields = schema.fields.filter(f => !f.required);
+  
+  if (testDataFilePath) {
+    // Есть данные из БД - используем их для pairwise!
+    lines.push('  // Используем разные записи из БД для pairwise комбинаций');
+    lines.push('  const dbRecords = Object.values(dbTestData).flat();');
+    lines.push('');
+    
+    // Функция для маппинга
+    lines.push('  const mapToDto = (record: any, fields: string[]) => {');
+    lines.push('    const result: any = {};');
+    lines.push('    for (const field of fields) {');
+    lines.push('      const snakeCase = field.replace(/([A-Z])/g, "_$1").toLowerCase();');
+    lines.push('      result[field] = record[field] ?? record[snakeCase] ?? record[field.toLowerCase()];');
+    lines.push('    }');
+    lines.push('    return result;');
+    lines.push('  };');
+    lines.push('');
+    
+    // Комбинации необязательных полей
+    if (optionalFields.length > 0) {
+      const combinations = generateOptionalFieldsCombinations(optionalFields);
+      
+      combinations.forEach((combo, index) => {
+        const recordIndex = index % 15; // Используем разные записи (макс 15)
+        
+        lines.push(`  // Комбинация ${index + 1}: запись ${recordIndex} из БД`);
+        lines.push(`  const record${index + 1} = dbRecords[${recordIndex}] || dbRecords[0];`);
+        lines.push(`  const pairwiseCombo${index + 1} = {`);
+        
+        // Обязательные поля из записи
+        lines.push('    ...' + `mapToDto(record${index + 1}, [${requiredFields.map(f => `'${f.name}'`).join(', ')}]),`);
+        
+        // Выбранные необязательные поля из той же записи
+        lines.push('    ...' + `mapToDto(record${index + 1}, [${combo.map(f => `'${f.name}'`).join(', ')}])`);
+        
+        lines.push('  };');
+        lines.push('');
+      });
+    }
+  } else {
+    // Нет данных из БД - генерируем моки (старый способ)
+    lines.push('  // Данные из БД отсутствуют, используются моки');
+    lines.push('  // Запустите analyzeAndGenerateTestData для генерации реальных данных');
+    lines.push('');
+    
+    // Комбинации необязательных полей
+    if (optionalFields.length > 0) {
+      const combinations = generateOptionalFieldsCombinations(optionalFields);
+      
+      combinations.forEach((combo, index) => {
+        lines.push(`  // Комбинация ${index + 1}: обязательные поля + ${combo.map(f => f.name).join(', ')}`);
+        lines.push(`  const pairwiseCombo${index + 1} = {`);
+        
+        // Обязательные поля
+        requiredFields.forEach(field => {
+          const value = generateMockValue(field);
+          lines.push(`    ${field.name}: ${value},`);
+        });
+        
+        // Выбранные необязательные поля
+        combo.forEach((field, fieldIndex) => {
+          const value = generateMockValue(field);
+          const comma = fieldIndex < combo.length - 1 ? ',' : '';
+          lines.push(`    ${field.name}: ${value}${comma}`);
+        });
+        
+        lines.push('  };');
+        lines.push('');
+      });
+    }
   }
   
   return lines.join('\n');
