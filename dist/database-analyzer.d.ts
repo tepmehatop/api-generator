@@ -63,6 +63,10 @@ export declare class DatabaseAnalyzer {
      */
     private findTablesByFields;
     /**
+     * Конвертирует camelCase в snake_case
+     */
+    private toSnakeCase;
+    /**
      * Генерирует варианты имени поля (camelCase, snake_case, etc)
      */
     private generateFieldVariants;

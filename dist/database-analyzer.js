@@ -225,6 +225,24 @@ class DatabaseAnalyzer {
         console.log(`  🔍 Ищу таблицы для полей: ${dtoFields.join(', ')}`);
         // Получаем все таблицы и колонки
         try {
+            const sqlQuery = `
+        SELECT 
+          table_name,
+          column_name,
+          data_type,
+          is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+        ORDER BY table_name, ordinal_position
+      `;
+            console.log('  📋 SQL запрос для получения схемы БД:');
+            console.log('  ┌─────────────────────────────────────────────────────────────────┐');
+            sqlQuery.split('\n').forEach(line => {
+                if (line.trim()) {
+                    console.log(`  │ ${line.padEnd(63)} │`);
+                }
+            });
+            console.log('  └─────────────────────────────────────────────────────────────────┘');
             const result = await this.dbConnect `
         SELECT 
           table_name,
@@ -236,6 +254,16 @@ class DatabaseAnalyzer {
         ORDER BY table_name, ordinal_position
       `;
             console.log(`  ✓ Получено ${result.length} колонок из БД`);
+            // Показываем первые 10 колонок для примера
+            if (result.length > 0) {
+                console.log('  📊 Примеры колонок из БД (первые 10):');
+                result.slice(0, 10).forEach((row) => {
+                    console.log(`      ${row.table_name}.${row.column_name} (${row.data_type})`);
+                });
+                if (result.length > 10) {
+                    console.log(`      ... и еще ${result.length - 10} колонок`);
+                }
+            }
             // Группируем по таблицам
             const tableColumns = new Map();
             for (const row of result) {
@@ -249,7 +277,10 @@ class DatabaseAnalyzer {
                 });
             }
             console.log(`  ✓ Найдено ${tableColumns.size} таблиц в БД`);
-            // Подсчитываем совпадения
+            console.log('');
+            console.log('  🔎 ДЕТАЛЬНЫЙ АНАЛИЗ КАЖДОГО ПОЛЯ DTO:');
+            console.log('  ═══════════════════════════════════════════════════════════════════');
+            // Подсчитываем совпадения с детальным логированием
             const scores = [];
             for (const [tableName, columns] of tableColumns.entries()) {
                 let matchCount = 0;
@@ -257,16 +288,47 @@ class DatabaseAnalyzer {
                 for (const dtoField of dtoFields) {
                     // Генерируем варианты имени поля
                     const variants = this.generateFieldVariants(dtoField);
+                    console.log(`  📌 Поле DTO: "${dtoField}"`);
+                    console.log(`     Генерирую варианты: ${variants.join(', ')}`);
+                    // Ищем совпадение
                     const matchedColumn = columns.find(col => variants.includes(col.name));
                     if (matchedColumn) {
                         matchCount++;
                         matchedFields.push(`${dtoField} → ${matchedColumn.name}`);
+                        console.log(`     ✓ НАЙДЕНО в таблице "${tableName}": ${matchedColumn.name}`);
                     }
+                    else {
+                        // Показываем что есть в таблице для отладки
+                        const similarColumns = columns
+                            .filter(col => {
+                            const colLower = col.name.toLowerCase();
+                            const fieldLower = dtoField.toLowerCase();
+                            return colLower.includes(fieldLower) || fieldLower.includes(colLower);
+                        })
+                            .slice(0, 3);
+                        if (similarColumns.length > 0) {
+                            console.log(`     ⚠️  НЕ НАЙДЕНО в "${tableName}", но есть похожие:`);
+                            similarColumns.forEach(col => {
+                                console.log(`        - ${col.name}`);
+                            });
+                        }
+                        else {
+                            console.log(`     ✗ НЕ НАЙДЕНО в "${tableName}"`);
+                        }
+                    }
+                    console.log('');
                 }
                 if (matchCount > 0) {
                     const confidence = matchCount / dtoFields.length;
-                    console.log(`  📊 ${tableName}: ${matchCount}/${dtoFields.length} совпадений (${(confidence * 100).toFixed(0)}%)`);
-                    matchedFields.forEach(m => console.log(`      ${m}`));
+                    console.log(`  ╔═══════════════════════════════════════════════════════════════╗`);
+                    console.log(`  ║ 🎯 ТАБЛИЦА: ${tableName.padEnd(48)} ║`);
+                    console.log(`  ║ Совпадений: ${matchCount}/${dtoFields.length} (${(confidence * 100).toFixed(0)}%)${' '.repeat(43 - matchCount.toString().length - dtoFields.length.toString().length)} ║`);
+                    console.log(`  ╠═══════════════════════════════════════════════════════════════╣`);
+                    matchedFields.forEach(m => {
+                        console.log(`  ║ ✓ ${m.padEnd(60)} ║`);
+                    });
+                    console.log(`  ╚═══════════════════════════════════════════════════════════════╝`);
+                    console.log('');
                     scores.push({
                         name: tableName,
                         columns,
@@ -276,10 +338,43 @@ class DatabaseAnalyzer {
                 }
             }
             if (scores.length === 0) {
-                console.log('  ⚠️  Совпадений не найдено. Проверьте naming convention.');
-                console.log('  💡 Пример вариантов для поля "customerId":');
-                const exampleVariants = this.generateFieldVariants('customerId');
-                exampleVariants.forEach(v => console.log(`      - ${v}`));
+                console.log('  ╔═══════════════════════════════════════════════════════════════╗');
+                console.log('  ║ ⚠️  СОВПАДЕНИЙ НЕ НАЙДЕНО                                    ║');
+                console.log('  ╚═══════════════════════════════════════════════════════════════╝');
+                console.log('');
+                console.log('  🔧 ОТЛАДОЧНАЯ ИНФОРМАЦИЯ:');
+                console.log('');
+                console.log('  📋 Ваши поля DTO:');
+                dtoFields.forEach(field => {
+                    console.log(`     - ${field}`);
+                });
+                console.log('');
+                console.log('  🔄 Примеры генерируемых вариантов:');
+                dtoFields.slice(0, 3).forEach(field => {
+                    const variants = this.generateFieldVariants(field);
+                    console.log(`     ${field} →`);
+                    variants.forEach(v => {
+                        console.log(`        - "${v}"`);
+                    });
+                });
+                console.log('');
+                console.log('  💡 ВОЗМОЖНЫЕ ПРОБЛЕМЫ:');
+                console.log('     1. Naming convention отличается от стандартной');
+                console.log('     2. Поля находятся в разных таблицах');
+                console.log('     3. Имена полей в БД сильно отличаются от DTO');
+                console.log('');
+                console.log('  📝 РЕКОМЕНДАЦИИ:');
+                console.log('     1. Проверьте реальные имена колонок в БД:');
+                console.log('        SELECT column_name FROM information_schema.columns');
+                console.log('        WHERE table_name = \'предполагаемая_таблица\';');
+                console.log('');
+                console.log('     2. Сравните с вашими полями DTO:');
+                dtoFields.forEach(field => {
+                    console.log(`        DTO: ${field} → БД: ${this.toSnakeCase(field)}`);
+                });
+                console.log('');
+                console.log('     3. Если naming сильно отличается, используйте force: false');
+                console.log('        и укажите таблицы вручную в тесте');
             }
             // Сортируем по confidence и возвращаем топ-10
             return scores
@@ -293,25 +388,98 @@ class DatabaseAnalyzer {
         }
     }
     /**
+     * Конвертирует camelCase в snake_case
+     */
+    toSnakeCase(str) {
+        return str
+            .replace(/([A-Z])/g, '_$1')
+            .toLowerCase()
+            .replace(/^_/, '');
+    }
+    /**
      * Генерирует варианты имени поля (camelCase, snake_case, etc)
      */
     generateFieldVariants(field) {
         const variants = new Set();
-        // Оригинал
+        // 1. Оригинал
         variants.add(field);
         variants.add(field.toLowerCase());
-        // snake_case
-        const snakeCase = field.replace(/([A-Z])/g, '_$1').toLowerCase();
+        // 2. snake_case (правильная конвертация)
+        // orderType → order_type
+        // productId → product_id
+        // regNumberS → reg_number_s
+        const snakeCase = field
+            .replace(/([A-Z])/g, (match, char, offset) => {
+            // Если заглавная буква в начале, не добавляем подчеркивание
+            return offset === 0 ? char.toLowerCase() : '_' + char.toLowerCase();
+        });
         variants.add(snakeCase);
-        variants.add(snakeCase.replace(/^_/, ''));
-        // Plural формы
+        // 3. Вариант с подчеркиванием в начале (на случай если было с заглавной)
+        if (snakeCase.startsWith('_')) {
+            variants.add(snakeCase.substring(1));
+        }
+        // 4. SCREAMING_SNAKE_CASE
+        variants.add(snakeCase.toUpperCase());
+        // 5. kebab-case
+        const kebabCase = snakeCase.replace(/_/g, '-');
+        variants.add(kebabCase);
+        // 6. PascalCase
+        const pascalCase = field.charAt(0).toUpperCase() + field.slice(1);
+        variants.add(pascalCase);
+        // 7. Plural формы
         variants.add(field + 's');
         variants.add(snakeCase + 's');
-        // Без префиксов
-        const withoutPrefix = field.replace(/^(is|has|get|set)/, '');
-        variants.add(withoutPrefix);
-        variants.add(withoutPrefix.toLowerCase());
-        return Array.from(variants);
+        variants.add(field.toLowerCase() + 's');
+        // 8. Без последней буквы (для множественного числа)
+        if (field.endsWith('s') || field.endsWith('S')) {
+            const singular = field.slice(0, -1);
+            variants.add(singular);
+            variants.add(singular.toLowerCase());
+            const singularSnake = singular
+                .replace(/([A-Z])/g, (match, char, offset) => {
+                return offset === 0 ? char.toLowerCase() : '_' + char.toLowerCase();
+            });
+            variants.add(singularSnake);
+        }
+        // 9. Без префиксов (is, has, get, set)
+        const withoutPrefix = field.replace(/^(is|has|get|set|use|can|should)/, '');
+        if (withoutPrefix !== field) {
+            variants.add(withoutPrefix);
+            variants.add(withoutPrefix.toLowerCase());
+            const withoutPrefixSnake = withoutPrefix
+                .replace(/([A-Z])/g, (match, char, offset) => {
+                return offset === 0 ? char.toLowerCase() : '_' + char.toLowerCase();
+            });
+            variants.add(withoutPrefixSnake);
+        }
+        // 10. Без суффиксов (Id, ID, Type, Status, etc)
+        const withoutSuffix = field
+            .replace(/(Id|ID|Type|Status|Date|Time|At|By)$/, '');
+        if (withoutSuffix !== field) {
+            variants.add(withoutSuffix);
+            variants.add(withoutSuffix.toLowerCase());
+            const withoutSuffixSnake = withoutSuffix
+                .replace(/([A-Z])/g, (match, char, offset) => {
+                return offset === 0 ? char.toLowerCase() : '_' + char.toLowerCase();
+            });
+            variants.add(withoutSuffixSnake);
+        }
+        // 11. Альтернативные варианты для распространенных паттернов
+        // userId → user_id, uid
+        if (field.toLowerCase().endsWith('id')) {
+            const base = field.slice(0, -2);
+            const baseSnake = base
+                .replace(/([A-Z])/g, (match, char, offset) => {
+                return offset === 0 ? char.toLowerCase() : '_' + char.toLowerCase();
+            });
+            variants.add(baseSnake + '_id');
+            variants.add(baseSnake + 'id');
+            variants.add(base.toLowerCase() + '_id');
+            variants.add(base.toLowerCase() + 'id');
+        }
+        // 12. Убираем пустые строки
+        const result = Array.from(variants).filter(v => v.length > 0);
+        return result;
     }
     /**
      * ЭТАП 2: Находит связанные таблицы через FK
