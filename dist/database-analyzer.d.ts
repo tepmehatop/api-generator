@@ -13,6 +13,12 @@ export interface DatabaseAnalyzerConfig {
      */
     dbConnectionMethod: string;
     /**
+     * Схема БД для поиска таблиц
+     * @default null - искать во всех схемах
+     * Примеры: 'public', 'app', 'orders_schema'
+     */
+    dbSchema?: string | null;
+    /**
      * Force режим - заново искать таблицы даже если они уже найдены
      * @default false
      */

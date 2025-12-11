@@ -19,6 +19,13 @@ export interface DatabaseAnalyzerConfig {
   dbConnectionMethod: string;
   
   /**
+   * Схема БД для поиска таблиц
+   * @default null - искать во всех схемах
+   * Примеры: 'public', 'app', 'orders_schema'
+   */
+  dbSchema?: string | null;
+  
+  /**
    * Force режим - заново искать таблицы даже если они уже найдены
    * @default false
    */
@@ -95,6 +102,7 @@ export class DatabaseAnalyzer {
       force: false,
       dataStrategy: 'existing',
       samplesCount: 5,
+      dbSchema: null, // По умолчанию ищем во всех схемах
       ...config
     };
     this.dbConnect = dbConnectFunction;
@@ -316,17 +324,29 @@ export class DatabaseAnalyzer {
     
     console.log(`  🔍 Ищу таблицы для полей: ${dtoFields.join(', ')}`);
     
+    // Определяем режим поиска
+    const searchMode = this.config.dbSchema 
+      ? `в схеме "${this.config.dbSchema}"` 
+      : 'во всех схемах';
+    console.log(`  📊 Режим поиска: ${searchMode}`);
+    
     // Получаем все таблицы и колонки
     try {
+      // Формируем WHERE условие для схемы
+      const schemaCondition = this.config.dbSchema 
+        ? `table_schema = '${this.config.dbSchema}'`
+        : `table_schema NOT IN ('information_schema', 'pg_catalog')`;
+      
       const sqlQuery = `
         SELECT 
+          table_schema,
           table_name,
           column_name,
           data_type,
           is_nullable
         FROM information_schema.columns
-        WHERE table_schema = 'public'
-        ORDER BY table_name, ordinal_position
+        WHERE ${schemaCondition}
+        ORDER BY table_schema, table_name, ordinal_position
       `;
       
       console.log('  📋 SQL запрос для получения схемы БД:');
@@ -338,38 +358,66 @@ export class DatabaseAnalyzer {
       });
       console.log('  └─────────────────────────────────────────────────────────────────┘');
       
-      const result = await this.dbConnect`
-        SELECT 
-          table_name,
-          column_name,
-          data_type,
-          is_nullable
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-        ORDER BY table_name, ordinal_position
-      `;
+      let result;
+      if (this.config.dbSchema) {
+        // Ищем в конкретной схеме
+        result = await this.dbConnect`
+          SELECT 
+            table_schema,
+            table_name,
+            column_name,
+            data_type,
+            is_nullable
+          FROM information_schema.columns
+          WHERE table_schema = ${this.config.dbSchema}
+          ORDER BY table_schema, table_name, ordinal_position
+        `;
+      } else {
+        // Ищем во всех схемах (кроме системных)
+        result = await this.dbConnect`
+          SELECT 
+            table_schema,
+            table_name,
+            column_name,
+            data_type,
+            is_nullable
+          FROM information_schema.columns
+          WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+          ORDER BY table_schema, table_name, ordinal_position
+        `;
+      }
       
       console.log(`  ✓ Получено ${result.length} колонок из БД`);
+      
+      // Показываем найденные схемы
+      const schemas = new Set(result.map((row: any) => row.table_schema));
+      console.log(`  ✓ Найдено схем: ${schemas.size}`);
+      schemas.forEach(schema => console.log(`      - ${schema}`));
       
       // Показываем первые 10 колонок для примера
       if (result.length > 0) {
         console.log('  📊 Примеры колонок из БД (первые 10):');
         result.slice(0, 10).forEach((row: any) => {
-          console.log(`      ${row.table_name}.${row.column_name} (${row.data_type})`);
+          console.log(`      ${row.table_schema}.${row.table_name}.${row.column_name} (${row.data_type})`);
         });
         if (result.length > 10) {
           console.log(`      ... и еще ${result.length - 10} колонок`);
         }
       }
       
-      // Группируем по таблицам
+      // Группируем по таблицам (с учетом схемы)
       const tableColumns = new Map<string, ColumnInfo[]>();
+      const tableSchemas = new Map<string, string>(); // table_name → schema
+      
       for (const row of result) {
-        if (!tableColumns.has(row.table_name)) {
-          tableColumns.set(row.table_name, []);
+        const fullTableName = `${row.table_schema}.${row.table_name}`;
+        
+        if (!tableColumns.has(fullTableName)) {
+          tableColumns.set(fullTableName, []);
+          tableSchemas.set(fullTableName, row.table_schema);
         }
         
-        tableColumns.get(row.table_name)!.push({
+        tableColumns.get(fullTableName)!.push({
           name: row.column_name,
           type: row.data_type,
           nullable: row.is_nullable === 'YES',
@@ -384,7 +432,7 @@ export class DatabaseAnalyzer {
       // Подсчитываем совпадения с детальным логированием
       const scores: TableInfo[] = [];
       
-      for (const [tableName, columns] of tableColumns.entries()) {
+      for (const [fullTableName, columns] of tableColumns.entries()) {
         let matchCount = 0;
         const matchedFields: string[] = [];
         
@@ -393,7 +441,7 @@ export class DatabaseAnalyzer {
           const variants = this.generateFieldVariants(dtoField);
           
           console.log(`  📌 Поле DTO: "${dtoField}"`);
-          console.log(`     Генерирую варианты: ${variants.join(', ')}`);
+          console.log(`     Генерирую варианты: ${variants.slice(0, 8).join(', ')}${variants.length > 8 ? ', ...' : ''}`);
           
           // Ищем совпадение
           const matchedColumn = columns.find(col => variants.includes(col.name));
@@ -401,7 +449,7 @@ export class DatabaseAnalyzer {
           if (matchedColumn) {
             matchCount++;
             matchedFields.push(`${dtoField} → ${matchedColumn.name}`);
-            console.log(`     ✓ НАЙДЕНО в таблице "${tableName}": ${matchedColumn.name}`);
+            console.log(`     ✓ НАЙДЕНО в таблице "${fullTableName}": ${matchedColumn.name}`);
           } else {
             // Показываем что есть в таблице для отладки
             const similarColumns = columns
@@ -413,12 +461,12 @@ export class DatabaseAnalyzer {
               .slice(0, 3);
             
             if (similarColumns.length > 0) {
-              console.log(`     ⚠️  НЕ НАЙДЕНО в "${tableName}", но есть похожие:`);
+              console.log(`     ⚠️  НЕ НАЙДЕНО в "${fullTableName}", но есть похожие:`);
               similarColumns.forEach(col => {
                 console.log(`        - ${col.name}`);
               });
             } else {
-              console.log(`     ✗ НЕ НАЙДЕНО в "${tableName}"`);
+              console.log(`     ✗ НЕ НАЙДЕНО в "${fullTableName}"`);
             }
           }
           console.log('');
@@ -428,7 +476,7 @@ export class DatabaseAnalyzer {
           const confidence = matchCount / dtoFields.length;
           
           console.log(`  ╔═══════════════════════════════════════════════════════════════╗`);
-          console.log(`  ║ 🎯 ТАБЛИЦА: ${tableName.padEnd(48)} ║`);
+          console.log(`  ║ 🎯 ТАБЛИЦА: ${fullTableName.padEnd(48)} ║`);
           console.log(`  ║ Совпадений: ${matchCount}/${dtoFields.length} (${(confidence * 100).toFixed(0)}%)${' '.repeat(43 - matchCount.toString().length - dtoFields.length.toString().length)} ║`);
           console.log(`  ╠═══════════════════════════════════════════════════════════════╣`);
           matchedFields.forEach(m => {
@@ -438,9 +486,9 @@ export class DatabaseAnalyzer {
           console.log('');
           
           scores.push({
-            name: tableName,
+            name: fullTableName, // Сохраняем полное имя со схемой
             columns,
-            foreignKeys: [], // Заполним позже
+            foreignKeys: [],
             confidence
           });
         }
@@ -462,27 +510,41 @@ export class DatabaseAnalyzer {
         dtoFields.slice(0, 3).forEach(field => {
           const variants = this.generateFieldVariants(field);
           console.log(`     ${field} →`);
-          variants.forEach(v => {
+          variants.slice(0, 8).forEach(v => {
             console.log(`        - "${v}"`);
           });
+          if (variants.length > 8) {
+            console.log(`        ... и еще ${variants.length - 8} вариантов`);
+          }
         });
         console.log('');
         console.log('  💡 ВОЗМОЖНЫЕ ПРОБЛЕМЫ:');
         console.log('     1. Naming convention отличается от стандартной');
         console.log('     2. Поля находятся в разных таблицах');
         console.log('     3. Имена полей в БД сильно отличаются от DTO');
+        console.log('     4. Таблицы находятся в другой схеме');
         console.log('');
         console.log('  📝 РЕКОМЕНДАЦИИ:');
         console.log('     1. Проверьте реальные имена колонок в БД:');
-        console.log('        SELECT column_name FROM information_schema.columns');
-        console.log('        WHERE table_name = \'предполагаемая_таблица\';');
+        if (this.config.dbSchema) {
+          console.log(`        SELECT column_name FROM information_schema.columns`);
+          console.log(`        WHERE table_schema = '${this.config.dbSchema}'`);
+          console.log(`          AND table_name = 'предполагаемая_таблица';`);
+        } else {
+          console.log(`        SELECT table_schema, table_name, column_name`);
+          console.log(`        FROM information_schema.columns`);
+          console.log(`        WHERE table_name = 'предполагаемая_таблица';`);
+        }
         console.log('');
         console.log('     2. Сравните с вашими полями DTO:');
         dtoFields.forEach(field => {
           console.log(`        DTO: ${field} → БД: ${this.toSnakeCase(field)}`);
         });
         console.log('');
-        console.log('     3. Если naming сильно отличается, используйте force: false');
+        console.log('     3. Если таблицы в другой схеме, укажите dbSchema:');
+        console.log('        dbSchema: "your_schema_name"');
+        console.log('');
+        console.log('     4. Если naming сильно отличается, используйте force: false');
         console.log('        и укажите таблицы вручную в тесте');
       }
       
@@ -677,14 +739,19 @@ export class DatabaseAnalyzer {
     
     for (const table of tablesToCheck) {
       try {
+        // Парсим schema.table или просто table
+        const [schema, tableName] = table.includes('.') 
+          ? table.split('.') 
+          : [this.config.dbSchema || 'public', table];
+        
         const rows = await this.dbConnect`
-          SELECT * FROM ${this.dbConnect(table)}
+          SELECT * FROM ${this.dbConnect(schema + '.' + tableName)}
           ORDER BY id DESC
           LIMIT 10
         `;
         before[table] = rows;
-      } catch (error) {
-        console.warn(`  ⚠️  Не удалось прочитать таблицу ${table}`);
+      } catch (error: any) {
+        console.warn(`  ⚠️  Не удалось прочитать таблицу ${table}: ${error.message}`);
       }
     }
     
@@ -729,14 +796,19 @@ export class DatabaseAnalyzer {
     
     for (const table of tablesToCheck) {
       try {
+        // Парсим schema.table или просто table
+        const [schema, tableName] = table.includes('.') 
+          ? table.split('.') 
+          : [this.config.dbSchema || 'public', table];
+        
         const rows = await this.dbConnect`
-          SELECT * FROM ${this.dbConnect(table)}
+          SELECT * FROM ${this.dbConnect(schema + '.' + tableName)}
           ORDER BY id DESC
           LIMIT 10
         `;
         after[table] = rows;
-      } catch (error) {
-        // Игнорируем
+      } catch (error: any) {
+        console.warn(`  ⚠️  Ошибка при чтении ${table}: ${error.message}`);
       }
     }
     
@@ -814,16 +886,38 @@ export class DatabaseAnalyzer {
     
     for (const table of tables) {
       try {
+        // Парсим schema.table или просто table
+        const [schema, tableName] = table.includes('.') 
+          ? table.split('.') 
+          : [this.config.dbSchema || 'public', table];
+        
+        const fullTableName = `${schema}.${tableName}`;
+        
         if (this.config.dataStrategy === 'existing' || this.config.dataStrategy === 'both') {
           // Берем существующие данные
-          const existing = await this.dbConnect`
-            SELECT * FROM ${this.dbConnect(table)}
-            WHERE deleted_at IS NULL
-            ORDER BY created_at DESC
-            LIMIT ${this.config.samplesCount}
-          `;
+          // Сначала пробуем с deleted_at, если не получится - без него
+          let existing;
           
-          if (existing.length > 0) {
+          try {
+            existing = await this.dbConnect`
+              SELECT * FROM ${this.dbConnect(fullTableName)}
+              WHERE deleted_at IS NULL
+              ORDER BY created_at DESC
+              LIMIT ${this.config.samplesCount}
+            `;
+          } catch (error: any) {
+            // Возможно нет поля deleted_at или created_at, пробуем простой запрос
+            if (error.message.includes('does not exist')) {
+              existing = await this.dbConnect`
+                SELECT * FROM ${this.dbConnect(fullTableName)}
+                LIMIT ${this.config.samplesCount}
+              `;
+            } else {
+              throw error;
+            }
+          }
+          
+          if (existing && existing.length > 0) {
             testData[table] = existing.map((row: any) => this.sanitizeRow(row));
             console.log(`  ✓ ${table}: ${existing.length} записей из БД`);
           } else {
