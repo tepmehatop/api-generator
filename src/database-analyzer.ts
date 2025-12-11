@@ -42,6 +42,32 @@ export interface DatabaseAnalyzerConfig {
    * @default 5
    */
   samplesCount?: number;
+  
+  /**
+   * Этапы анализа которые нужно выполнить
+   * @default { schemaAnalysis: true, foreignKeys: true, empiricalTest: true }
+   */
+  stages?: {
+    schemaAnalysis?: boolean;    // Этап 1: Анализ схемы БД
+    foreignKeys?: boolean;        // Этап 2: Анализ Foreign Keys
+    empiricalTest?: boolean;      // Этап 3: Эмпирический тест (вызов endpoint)
+  };
+  
+  /**
+   * Токен авторизации для вызова endpoint (для Этапа 3)
+   * Будет добавлен в заголовок Authorization: Bearer <token>
+   */
+  authToken?: string;
+  
+  /**
+   * Детализация логов для каждого этапа
+   * @default { stage1: true, stage2: true, stage3: true }
+   */
+  verboseStages?: {
+    stage1?: boolean;  // Детальные логи Этапа 1
+    stage2?: boolean;  // Детальные логи Этапа 2
+    stage3?: boolean;  // Детальные логи Этапа 3
+  };
 }
 
 /**
@@ -98,13 +124,29 @@ export class DatabaseAnalyzer {
   private schemaCache: Map<string, TableInfo> = new Map();
   
   constructor(config: DatabaseAnalyzerConfig, dbConnectFunction: any) {
+    const defaultStages = {
+      schemaAnalysis: true,
+      foreignKeys: true,
+      empiricalTest: true
+    };
+    
+    const defaultVerbose = {
+      stage1: true,
+      stage2: true,
+      stage3: true
+    };
+    
     this.config = {
       force: false,
       dataStrategy: 'existing',
       samplesCount: 5,
-      dbSchema: null, // По умолчанию ищем во всех схемах
+      dbSchema: null,
+      authToken: undefined,
+      stages: { ...defaultStages, ...(config.stages || {}) },
+      verboseStages: { ...defaultVerbose, ...(config.verboseStages || {}) },
       ...config
-    };
+    } as Required<DatabaseAnalyzerConfig>;
+    
     this.dbConnect = dbConnectFunction;
   }
   
@@ -114,6 +156,14 @@ export class DatabaseAnalyzer {
   async analyze(): Promise<AnalysisResult> {
     console.log('🔍 Начинаю анализ теста и БД...');
     console.log(`📄 Тест файл: ${this.config.testFilePath}`);
+    
+    // Показываем какие этапы включены
+    console.log('');
+    console.log('⚙️  Конфигурация этапов:');
+    console.log(`  Этап 1 (Schema Analysis): ${this.config.stages!.schemaAnalysis ? '✅ Включен' : '❌ Выключен'}`);
+    console.log(`  Этап 2 (Foreign Keys): ${this.config.stages!.foreignKeys ? '✅ Включен' : '❌ Выключен'}`);
+    console.log(`  Этап 3 (Empirical Test): ${this.config.stages!.empiricalTest ? '✅ Включен' : '❌ Выключен'}`);
+    console.log('');
     
     // 1. Читаем тест файл и извлекаем информацию
     const testInfo = await this.extractTestInfo();
@@ -144,54 +194,124 @@ export class DatabaseAnalyzer {
       console.log(`✓ Извлечены поля DTO: ${dtoFields.join(', ')}`);
     }
     
+    let suspectedTables: TableInfo[] = [];
+    let relatedTables: string[] = [];
+    let confirmedTables: string[] = [];
+    
     // 4. ЭТАП 1: Schema Analysis - находим подозрительные таблицы
-    console.log('\n📊 ЭТАП 1: Анализ схемы БД...');
-    const suspectedTables = await this.findTablesByFields(dtoFields);
-    console.log(`✓ Найдено подозрительных таблиц: ${suspectedTables.length}`);
-    suspectedTables.forEach(t => 
-      console.log(`  - ${t.name} (confidence: ${(t.confidence * 100).toFixed(0)}%)`)
-    );
+    if (this.config.stages!.schemaAnalysis) {
+      console.log('\n📊 ЭТАП 1: Анализ схемы БД...');
+      suspectedTables = await this.findTablesByFields(dtoFields);
+      
+      if (suspectedTables.length > 0) {
+        console.log(`✓ Найдено подозрительных таблиц: ${suspectedTables.length}`);
+        suspectedTables.forEach(t => 
+          console.log(`  - ${t.name} (confidence: ${(t.confidence * 100).toFixed(0)}%)`)
+        );
+      } else {
+        console.log(`⚠️  Подозрительные таблицы не найдены`);
+      }
+    } else {
+      console.log('\n⏭️  ЭТАП 1: Пропущен (отключен в конфигурации)');
+    }
     
     // 5. ЭТАП 2: FK Analysis - расширяем список связанными таблицами
-    console.log('\n🔗 ЭТАП 2: Анализ Foreign Keys...');
-    const relatedTables = await this.findRelatedTables(
-      suspectedTables.map(t => t.name)
-    );
-    console.log(`✓ Найдено связанных таблиц: ${relatedTables.length}`);
-    relatedTables.forEach(t => console.log(`  - ${t}`));
+    if (this.config.stages!.foreignKeys && suspectedTables.length > 0) {
+      console.log('\n🔗 ЭТАП 2: Анализ Foreign Keys...');
+      relatedTables = await this.findRelatedTables(
+        suspectedTables.map(t => t.name)
+      );
+      
+      if (relatedTables.length > 0) {
+        console.log(`✓ Найдено связанных таблиц: ${relatedTables.length}`);
+        relatedTables.forEach(t => console.log(`  - ${t}`));
+      } else {
+        console.log(`ℹ️  Связанные таблицы не найдены (или нет Foreign Keys)`);
+      }
+    } else if (this.config.stages!.foreignKeys) {
+      console.log('\n⏭️  ЭТАП 2: Пропущен (нет подозрительных таблиц)');
+    } else {
+      console.log('\n⏭️  ЭТАП 2: Пропущен (отключен в конфигурации)');
+    }
     
     // 6. ЭТАП 3: Empirical Test - подтверждаем реальным вызовом
-    console.log('\n🎯 ЭТАП 3: Эмпирический тест...');
-    const allTablesToCheck = [
-      ...suspectedTables.map(t => t.name),
-      ...relatedTables
-    ];
-    
-    const confirmedTables = await this.confirmWithRealCall(
-      testInfo.endpoint,
-      testInfo.httpMethod,
-      dtoFields,
-      allTablesToCheck
-    );
-    console.log(`✓ Подтверждено таблиц: ${confirmedTables.length}`);
-    confirmedTables.forEach(t => console.log(`  - ${t}`));
+    if (this.config.stages!.empiricalTest && suspectedTables.length > 0) {
+      console.log('\n🎯 ЭТАП 3: Эмпирический тест...');
+      const allTablesToCheck = [
+        ...suspectedTables.map(t => t.name),
+        ...relatedTables
+      ];
+      
+      confirmedTables = await this.confirmWithRealCall(
+        testInfo.endpoint,
+        testInfo.httpMethod,
+        dtoFields,
+        allTablesToCheck
+      );
+      
+      if (confirmedTables.length > 0) {
+        console.log(`✓ Подтверждено таблиц: ${confirmedTables.length}`);
+        confirmedTables.forEach(t => console.log(`  - ${t}`));
+      } else {
+        console.log(`⚠️  Таблицы не подтверждены (endpoint не создал данных или вернул ошибку)`);
+        console.log(`💡 Используем таблицу с наивысшим confidence из Этапа 1`);
+        
+        // Используем таблицу с наивысшим confidence
+        if (suspectedTables.length > 0) {
+          confirmedTables = [suspectedTables[0].name];
+          console.log(`✓ Выбрана таблица: ${confirmedTables[0]} (${(suspectedTables[0].confidence * 100).toFixed(0)}% confidence)`);
+        }
+      }
+    } else if (this.config.stages!.empiricalTest) {
+      console.log('\n⏭️  ЭТАП 3: Пропущен (нет подозрительных таблиц)');
+      
+      // Используем результаты Этапа 1
+      if (suspectedTables.length > 0) {
+        confirmedTables = [suspectedTables[0].name];
+        console.log(`✓ Используется таблица с наивысшим confidence: ${confirmedTables[0]} (${(suspectedTables[0].confidence * 100).toFixed(0)}%)`);
+      }
+    } else {
+      console.log('\n⏭️  ЭТАП 3: Пропущен (отключен в конфигурации)');
+      
+      // Используем результаты Этапа 1
+      if (suspectedTables.length > 0) {
+        confirmedTables = [suspectedTables[0].name];
+        console.log(`✓ Используется таблица с наивысшим confidence: ${confirmedTables[0]} (${(suspectedTables[0].confidence * 100).toFixed(0)}%)`);
+      }
+    }
     
     // 7. Генерируем тестовые данные
-    console.log('\n💾 Генерация тестовых данных...');
-    const testData = await this.generateTestData(confirmedTables);
-    console.log(`✓ Сгенерированы данные для ${Object.keys(testData).length} таблиц`);
-    
-    // 8. Обновляем тест файл
-    await this.updateTestFile(confirmedTables, testData);
-    console.log(`✓ Тест файл обновлен`);
-    
-    return {
-      endpoint: testInfo.endpoint,
-      confirmedTables,
-      suspectedTables: suspectedTables.map(t => t.name),
-      relatedTables,
-      testData
-    };
+    if (confirmedTables.length > 0) {
+      console.log('\n💾 Генерация тестовых данных...');
+      const testData = await this.generateTestData(confirmedTables);
+      console.log(`✓ Сгенерированы данные для ${Object.keys(testData).length} таблиц`);
+      
+      // 8. Обновляем тест файл
+      await this.updateTestFile(confirmedTables, testData);
+      console.log(`✓ Тест файл обновлен`);
+      
+      return {
+        endpoint: testInfo.endpoint,
+        confirmedTables,
+        suspectedTables: suspectedTables.map(t => t.name),
+        relatedTables,
+        testData
+      };
+    } else {
+      console.log('\n❌ Не удалось найти подходящие таблицы');
+      console.log('💡 Попробуйте:');
+      console.log('   1. Проверить что DTO указано правильно');
+      console.log('   2. Указать конкретную схему БД (dbSchema)');
+      console.log('   3. Проверить naming convention (camelCase vs snake_case)');
+      
+      return {
+        endpoint: testInfo.endpoint,
+        confirmedTables: [],
+        suspectedTables: suspectedTables.map(t => t.name),
+        relatedTables,
+        testData: {}
+      };
+    }
   }
   
   /**
@@ -425,9 +545,14 @@ export class DatabaseAnalyzer {
       }
       
       console.log(`  ✓ Найдено ${tableColumns.size} таблиц в БД`);
-      console.log('');
-      console.log('  🔎 ДЕТАЛЬНЫЙ АНАЛИЗ КАЖДОГО ПОЛЯ DTO:');
-      console.log('  ═══════════════════════════════════════════════════════════════════');
+      
+      const verbose = this.config.verboseStages!.stage1;
+      
+      if (verbose) {
+        console.log('');
+        console.log('  🔎 ДЕТАЛЬНЫЙ АНАЛИЗ КАЖДОГО ПОЛЯ DTO:');
+        console.log('  ═══════════════════════════════════════════════════════════════════');
+      }
       
       // Подсчитываем совпадения с детальным логированием
       const scores: TableInfo[] = [];
@@ -440,8 +565,10 @@ export class DatabaseAnalyzer {
           // Генерируем варианты имени поля
           const variants = this.generateFieldVariants(dtoField);
           
-          console.log(`  📌 Поле DTO: "${dtoField}"`);
-          console.log(`     Генерирую варианты: ${variants.slice(0, 8).join(', ')}${variants.length > 8 ? ', ...' : ''}`);
+          if (verbose) {
+            console.log(`  📌 Поле DTO: "${dtoField}"`);
+            console.log(`     Генерирую варианты: ${variants.slice(0, 8).join(', ')}${variants.length > 8 ? ', ...' : ''}`);
+          }
           
           // Ищем совпадение
           const matchedColumn = columns.find(col => variants.includes(col.name));
@@ -449,8 +576,11 @@ export class DatabaseAnalyzer {
           if (matchedColumn) {
             matchCount++;
             matchedFields.push(`${dtoField} → ${matchedColumn.name}`);
-            console.log(`     ✓ НАЙДЕНО в таблице "${fullTableName}": ${matchedColumn.name}`);
-          } else {
+            
+            if (verbose) {
+              console.log(`     ✓ НАЙДЕНО в таблице "${fullTableName}": ${matchedColumn.name}`);
+            }
+          } else if (verbose) {
             // Показываем что есть в таблице для отладки
             const similarColumns = columns
               .filter(col => {
@@ -469,21 +599,26 @@ export class DatabaseAnalyzer {
               console.log(`     ✗ НЕ НАЙДЕНО в "${fullTableName}"`);
             }
           }
-          console.log('');
+          
+          if (verbose) {
+            console.log('');
+          }
         }
         
         if (matchCount > 0) {
           const confidence = matchCount / dtoFields.length;
           
-          console.log(`  ╔═══════════════════════════════════════════════════════════════╗`);
-          console.log(`  ║ 🎯 ТАБЛИЦА: ${fullTableName.padEnd(48)} ║`);
-          console.log(`  ║ Совпадений: ${matchCount}/${dtoFields.length} (${(confidence * 100).toFixed(0)}%)${' '.repeat(43 - matchCount.toString().length - dtoFields.length.toString().length)} ║`);
-          console.log(`  ╠═══════════════════════════════════════════════════════════════╣`);
-          matchedFields.forEach(m => {
-            console.log(`  ║ ✓ ${m.padEnd(60)} ║`);
-          });
-          console.log(`  ╚═══════════════════════════════════════════════════════════════╝`);
-          console.log('');
+          if (verbose) {
+            console.log(`  ╔═══════════════════════════════════════════════════════════════╗`);
+            console.log(`  ║ 🎯 ТАБЛИЦА: ${fullTableName.padEnd(48)} ║`);
+            console.log(`  ║ Совпадений: ${matchCount}/${dtoFields.length} (${(confidence * 100).toFixed(0)}%)${' '.repeat(43 - matchCount.toString().length - dtoFields.length.toString().length)} ║`);
+            console.log(`  ╠═══════════════════════════════════════════════════════════════╣`);
+            matchedFields.forEach(m => {
+              console.log(`  ║ ✓ ${m.padEnd(60)} ║`);
+            });
+            console.log(`  ╚═══════════════════════════════════════════════════════════════╝`);
+            console.log('');
+          }
           
           scores.push({
             name: fullTableName, // Сохраняем полное имя со схемой
@@ -679,38 +814,83 @@ export class DatabaseAnalyzer {
   private async findRelatedTables(mainTables: string[]): Promise<string[]> {
     if (mainTables.length === 0) return [];
     
+    const verbose = this.config.verboseStages!.stage2;
     const related = new Set<string>();
     
+    if (verbose) {
+      console.log('  🔍 Ищу Foreign Keys для таблиц...');
+    }
+    
     for (const table of mainTables) {
-      // Прямые FK (куда ссылается эта таблица)
-      const directFKs = await this.dbConnect`
-        SELECT
-          ccu.table_name AS foreign_table
-        FROM information_schema.table_constraints AS tc
-        JOIN information_schema.key_column_usage AS kcu
-          ON tc.constraint_name = kcu.constraint_name
-        JOIN information_schema.constraint_column_usage AS ccu
-          ON ccu.constraint_name = tc.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND tc.table_name = ${table}
-      `;
+      if (verbose) {
+        console.log(`  📊 Анализирую таблицу: ${table}`);
+      }
       
-      directFKs.forEach((row: any) => related.add(row.foreign_table));
-      
-      // Обратные FK (кто ссылается на эту таблицу)
-      const reverseFKs = await this.dbConnect`
-        SELECT
-          tc.table_name AS referencing_table
-        FROM information_schema.table_constraints AS tc
-        JOIN information_schema.key_column_usage AS kcu
-          ON tc.constraint_name = kcu.constraint_name
-        JOIN information_schema.constraint_column_usage AS ccu
-          ON ccu.constraint_name = tc.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY'
-          AND ccu.table_name = ${table}
-      `;
-      
-      reverseFKs.forEach((row: any) => related.add(row.referencing_table));
+      try {
+        // Прямые FK (куда ссылается эта таблица)
+        const directFKs = await this.dbConnect`
+          SELECT
+            ccu.table_schema AS foreign_schema,
+            ccu.table_name AS foreign_table
+          FROM information_schema.table_constraints AS tc
+          JOIN information_schema.key_column_usage AS kcu
+            ON tc.constraint_name = kcu.constraint_name
+          JOIN information_schema.constraint_column_usage AS ccu
+            ON ccu.constraint_name = tc.constraint_name
+          WHERE tc.constraint_type = 'FOREIGN KEY'
+            AND tc.table_name = ${table.split('.').pop()}
+        `;
+        
+        if (verbose && directFKs.length > 0) {
+          console.log(`     → Прямые FK (куда ссылается):`);
+          directFKs.forEach((row: any) => {
+            const fullName = row.foreign_schema ? `${row.foreign_schema}.${row.foreign_table}` : row.foreign_table;
+            console.log(`        - ${fullName}`);
+            related.add(fullName);
+          });
+        } else {
+          directFKs.forEach((row: any) => {
+            const fullName = row.foreign_schema ? `${row.foreign_schema}.${row.foreign_table}` : row.foreign_table;
+            related.add(fullName);
+          });
+        }
+        
+        // Обратные FK (кто ссылается на эту таблицу)
+        const reverseFKs = await this.dbConnect`
+          SELECT
+            tc.table_schema AS referencing_schema,
+            tc.table_name AS referencing_table
+          FROM information_schema.table_constraints AS tc
+          JOIN information_schema.key_column_usage AS kcu
+            ON tc.constraint_name = kcu.constraint_name
+          JOIN information_schema.constraint_column_usage AS ccu
+            ON ccu.constraint_name = tc.constraint_name
+          WHERE tc.constraint_type = 'FOREIGN KEY'
+            AND ccu.table_name = ${table.split('.').pop()}
+        `;
+        
+        if (verbose && reverseFKs.length > 0) {
+          console.log(`     ← Обратные FK (кто ссылается):`);
+          reverseFKs.forEach((row: any) => {
+            const fullName = row.referencing_schema ? `${row.referencing_schema}.${row.referencing_table}` : row.referencing_table;
+            console.log(`        - ${fullName}`);
+            related.add(fullName);
+          });
+        } else {
+          reverseFKs.forEach((row: any) => {
+            const fullName = row.referencing_schema ? `${row.referencing_schema}.${row.referencing_table}` : row.referencing_table;
+            related.add(fullName);
+          });
+        }
+        
+        if (verbose && directFKs.length === 0 && reverseFKs.length === 0) {
+          console.log(`     ℹ️  Foreign Keys не найдены`);
+        }
+      } catch (error: any) {
+        if (verbose) {
+          console.log(`     ⚠️  Ошибка при поиске FK: ${error.message}`);
+        }
+      }
     }
     
     // Убираем основные таблицы из результата
@@ -757,34 +937,103 @@ export class DatabaseAnalyzer {
     
     // 2. Генерируем уникальные тестовые данные
     const uniqueData = this.generateUniqueTestData(dtoFields);
-    console.log('  🎲 Сгенерированы уникальные данные');
+    
+    const verbose = this.config.verboseStages!.stage3;
+    
+    if (verbose) {
+      console.log('  🎲 Сгенерированы уникальные данные:');
+      console.log(JSON.stringify(uniqueData, null, 2).split('\n').map(l => '     ' + l).join('\n'));
+    } else {
+      console.log('  🎲 Сгенерированы уникальные данные');
+    }
     
     // 3. Вызываем endpoint
-    console.log(`  📡 Вызываем ${method} ${endpoint}...`);
+    const baseUrl = process.env.StandURL || 'http://localhost:3000';
+    const url = baseUrl + endpoint;
+    
+    console.log(`  📡 Вызываем ${method} ${url}`);
+    
+    // Подготавливаем headers
+    const headers: any = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (this.config.authToken) {
+      headers['Authorization'] = `Bearer ${this.config.authToken}`;
+      if (verbose) {
+        console.log(`     ✓ Добавлен токен авторизации: Bearer ${this.config.authToken.substring(0, 10)}...`);
+      }
+    } else {
+      if (verbose) {
+        console.log(`     ⚠️  Токен авторизации не указан (может быть ошибка 401)`);
+      }
+    }
+    
+    if (verbose) {
+      console.log('');
+      console.log('  📋 CURL команда для отладки:');
+      console.log('  ┌─────────────────────────────────────────────────────────────────┐');
+      
+      const curlLines = [];
+      curlLines.push(`curl -X ${method} '${url}' \\`);
+      
+      Object.entries(headers).forEach(([key, value]) => {
+        curlLines.push(`  -H '${key}: ${value}' \\`);
+      });
+      
+      if (['POST', 'PUT', 'PATCH'].includes(method)) {
+        const dataStr = JSON.stringify(uniqueData);
+        curlLines.push(`  -d '${dataStr}'`);
+      } else {
+        // Убираем последний backslash
+        const lastLine = curlLines[curlLines.length - 1];
+        curlLines[curlLines.length - 1] = lastLine.replace(' \\', '');
+      }
+      
+      curlLines.forEach(line => {
+        console.log(`  │ ${line.padEnd(63)} │`);
+      });
+      
+      console.log('  └─────────────────────────────────────────────────────────────────┘');
+      console.log('');
+    }
     
     let callSuccess = false;
     try {
-      // Предполагаем что endpoint доступен через process.env.StandURL
-      const baseUrl = process.env.StandURL || 'http://localhost:3000';
-      const url = baseUrl + endpoint;
+      const config = { headers };
       
       if (method === 'GET') {
-        await axios.get(url);
+        await axios.get(url, config);
       } else if (method === 'POST') {
-        await axios.post(url, uniqueData);
+        await axios.post(url, uniqueData, config);
       } else if (method === 'PUT') {
-        await axios.put(url, uniqueData);
+        await axios.put(url, uniqueData, config);
       } else if (method === 'PATCH') {
-        await axios.patch(url, uniqueData);
+        await axios.patch(url, uniqueData, config);
       } else if (method === 'DELETE') {
-        await axios.delete(url);
+        await axios.delete(url, config);
       }
       
       callSuccess = true;
       console.log('  ✓ Endpoint вызван успешно');
     } catch (error: any) {
-      console.warn(`  ⚠️  Endpoint вернул ошибку: ${error.response?.status || error.message}`);
-      console.log('  ℹ️  Продолжаем анализ (данные могли быть записаны)');
+      const status = error.response?.status;
+      const statusText = error.response?.statusText;
+      
+      console.warn(`  ⚠️  Endpoint вернул ошибку: ${status || 'Network Error'} ${statusText || error.message}`);
+      
+      if (status === 401) {
+        console.log('  💡 Ошибка 401 (Unauthorized) - добавьте authToken в конфигурацию');
+      } else if (status === 403) {
+        console.log('  💡 Ошибка 403 (Forbidden) - проверьте права токена');
+      } else if (status === 400) {
+        console.log('  💡 Ошибка 400 (Bad Request) - данные не прошли валидацию');
+        if (verbose && error.response?.data) {
+          console.log('     Ответ сервера:', JSON.stringify(error.response.data, null, 2).split('\n').map(l => '     ' + l).join('\n'));
+        }
+      }
+      
+      console.log('  ℹ️  Продолжаем анализ (данные могли быть записаны до ошибки)');
     }
     
     // 4. Ждем немного (для асинхронных операций)

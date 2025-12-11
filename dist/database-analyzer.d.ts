@@ -33,6 +33,29 @@ export interface DatabaseAnalyzerConfig {
      * @default 5
      */
     samplesCount?: number;
+    /**
+     * Этапы анализа которые нужно выполнить
+     * @default { schemaAnalysis: true, foreignKeys: true, empiricalTest: true }
+     */
+    stages?: {
+        schemaAnalysis?: boolean;
+        foreignKeys?: boolean;
+        empiricalTest?: boolean;
+    };
+    /**
+     * Токен авторизации для вызова endpoint (для Этапа 3)
+     * Будет добавлен в заголовок Authorization: Bearer <token>
+     */
+    authToken?: string;
+    /**
+     * Детализация логов для каждого этапа
+     * @default { stage1: true, stage2: true, stage3: true }
+     */
+    verboseStages?: {
+        stage1?: boolean;
+        stage2?: boolean;
+        stage3?: boolean;
+    };
 }
 /**
  * Результат анализа
