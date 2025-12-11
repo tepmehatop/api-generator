@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.DatabaseAnalyzer = void 0;
 exports.analyzeAndGenerateTestData = analyzeAndGenerateTestData;
 const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const axios_1 = __importDefault(require("axios"));
 /**
  * Анализатор базы данных для генерации тестовых данных
@@ -59,7 +60,7 @@ class DatabaseAnalyzer {
         this.config = {
             force: false,
             dataStrategy: 'existing',
-            samplesCount: 5,
+            samplesCount: 15, // Увеличено до 15 для pairwise
             dbSchema: null,
             authToken: undefined,
             stages: { ...defaultStages, ...(config.stages || {}) },
@@ -747,8 +748,8 @@ class DatabaseAnalyzer {
                 console.warn(`  ⚠️  Не удалось прочитать таблицу ${table}: ${error.message}`);
             }
         }
-        // 2. Генерируем уникальные тестовые данные
-        const uniqueData = this.generateUniqueTestData(dtoFields);
+        // 2. Генерируем тестовые данные на основе существующих записей
+        const uniqueData = await this.generateTestDataFromExisting(dtoFields, tablesToCheck);
         const verbose = this.config.verboseStages.stage3;
         if (verbose) {
             console.log('  🎲 Сгенерированы уникальные данные:');
@@ -880,7 +881,114 @@ class DatabaseAnalyzer {
         return confirmed;
     }
     /**
-     * Генерирует уникальные тестовые данные
+     * Генерирует тестовые данные на основе существующих записей в БД
+     */
+    async generateTestDataFromExisting(dtoFields, tablesToCheck) {
+        const testData = {};
+        // Исключаемые поля
+        const excludeFields = [
+            'id',
+            'created_at',
+            'updated_at',
+            'deleted_at',
+            ...(this.config.excludeFieldsForEmpirical || [])
+        ];
+        const verbose = this.config.verboseStages.stage3;
+        if (verbose) {
+            console.log(`     🔍 Ищу существующие данные в таблицах: ${tablesToCheck.join(', ')}`);
+            console.log(`     ⏭️  Исключаю поля: ${excludeFields.join(', ')}`);
+        }
+        // Пробуем взять данные из первой таблицы
+        if (tablesToCheck.length > 0) {
+            try {
+                const tableName = tablesToCheck[0];
+                const [schema, table] = tableName.includes('.')
+                    ? tableName.split('.')
+                    : [this.config.dbSchema || 'public', tableName];
+                const fullTableName = `${schema}.${table}`;
+                // Берем случайную запись
+                const rows = await this.dbConnect `
+          SELECT * FROM ${this.dbConnect(fullTableName)}
+          ORDER BY RANDOM()
+          LIMIT 1
+        `;
+                if (rows && rows.length > 0) {
+                    const row = rows[0];
+                    if (verbose) {
+                        console.log(`     ✓ Найдена запись в ${tableName}`);
+                    }
+                    // Копируем данные, исключая служебные поля
+                    for (const field of dtoFields) {
+                        // Проверяем варианты имени поля
+                        const variants = this.generateFieldVariants(field);
+                        // Ищем совпадение в записи
+                        const matchedKey = Object.keys(row).find(key => variants.includes(key) && !excludeFields.includes(key));
+                        if (matchedKey) {
+                            testData[field] = row[matchedKey];
+                            if (verbose) {
+                                console.log(`     ✓ ${field} = ${JSON.stringify(row[matchedKey])} (из ${matchedKey})`);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (error) {
+                if (verbose) {
+                    console.log(`     ⚠️  Не удалось получить данные: ${error.message}`);
+                }
+            }
+        }
+        // Для полей которые не заполнили, генерируем значения
+        for (const field of dtoFields) {
+            if (testData[field] === undefined) {
+                testData[field] = this.generateFallbackValue(field);
+                if (verbose) {
+                    console.log(`     ⚠️  ${field} = ${JSON.stringify(testData[field])} (сгенерировано)`);
+                }
+            }
+        }
+        return testData;
+    }
+    /**
+     * Генерирует fallback значение для поля
+     */
+    generateFallbackValue(field) {
+        const fieldLower = field.toLowerCase();
+        const timestamp = Date.now();
+        if (fieldLower.includes('email')) {
+            return `test_${timestamp}@analyzer.test`;
+        }
+        else if (fieldLower.includes('phone')) {
+            return `+1${timestamp % 10000000000}`;
+        }
+        else if (fieldLower.includes('name')) {
+            return `TEST_${timestamp}_NAME`;
+        }
+        else if (fieldLower.includes('status')) {
+            return 'active';
+        }
+        else if (fieldLower.includes('amount') || fieldLower.includes('price')) {
+            return 99.99;
+        }
+        else if (fieldLower.includes('count') || fieldLower.includes('quantity')) {
+            return 1;
+        }
+        else if (fieldLower.includes('date') || fieldLower.includes('time')) {
+            return new Date().toISOString();
+        }
+        else if (fieldLower.includes('is') || fieldLower.includes('has')) {
+            return true;
+        }
+        else if (fieldLower.includes('type')) {
+            return 'standard';
+        }
+        else {
+            return `test_value_${timestamp}`;
+        }
+    }
+    /**
+     * Генерирует уникальные тестовые данные (устаревший метод)
+     * @deprecated Используйте generateTestDataFromExisting
      */
     generateUniqueTestData(dtoFields) {
         const timestamp = Date.now();
@@ -931,24 +1039,46 @@ class DatabaseAnalyzer {
                     : [this.config.dbSchema || 'public', table];
                 const fullTableName = `${schema}.${tableName}`;
                 if (this.config.dataStrategy === 'existing' || this.config.dataStrategy === 'both') {
-                    // Берем существующие данные
-                    // Сначала пробуем с deleted_at, если не получится - без него
+                    // Берем разнообразные данные (не только последние)
+                    // Стратегия: берем записи с разными датами в пределах года
                     let existing;
                     try {
+                        // Пробуем взять разнообразные записи
                         existing = await this.dbConnect `
               SELECT * FROM ${this.dbConnect(fullTableName)}
               WHERE deleted_at IS NULL
-              ORDER BY created_at DESC
+                AND created_at >= NOW() - INTERVAL '1 year'
+              ORDER BY RANDOM()
               LIMIT ${this.config.samplesCount}
             `;
-                    }
-                    catch (error) {
-                        // Возможно нет поля deleted_at или created_at, пробуем простой запрос
-                        if (error.message.includes('does not exist')) {
+                        // Если мало записей, берем без ограничения по дате
+                        if (!existing || existing.length < this.config.samplesCount) {
                             existing = await this.dbConnect `
                 SELECT * FROM ${this.dbConnect(fullTableName)}
+                WHERE deleted_at IS NULL
+                ORDER BY RANDOM()
                 LIMIT ${this.config.samplesCount}
               `;
+                        }
+                    }
+                    catch (error) {
+                        // Возможно нет поля deleted_at или created_at
+                        if (error.message.includes('does not exist') || error.message.includes('column')) {
+                            try {
+                                // Пробуем с RANDOM без фильтров
+                                existing = await this.dbConnect `
+                  SELECT * FROM ${this.dbConnect(fullTableName)}
+                  ORDER BY RANDOM()
+                  LIMIT ${this.config.samplesCount}
+                `;
+                            }
+                            catch (randomError) {
+                                // Если RANDOM не поддерживается, берем просто LIMIT
+                                existing = await this.dbConnect `
+                  SELECT * FROM ${this.dbConnect(fullTableName)}
+                  LIMIT ${this.config.samplesCount}
+                `;
+                            }
                         }
                         else {
                             throw error;
@@ -998,25 +1128,115 @@ class DatabaseAnalyzer {
      */
     async updateTestFile(tables, testData) {
         let content = fs.readFileSync(this.config.testFilePath, 'utf-8');
-        // 1. Обновляем список таблиц
+        // 1. Создаем отдельный файл с данными
+        const dataImportPath = await this.createTestDataFile(this.config.testFilePath, testData);
+        // 2. Добавляем импорт данных в начало файла (если еще нет)
+        const importStatement = `import { dbTestData } from '${dataImportPath}';`;
+        if (!content.includes(dataImportPath)) {
+            // Находим последний импорт
+            const lines = content.split('\n');
+            let lastImportIndex = -1;
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].trim().startsWith('import ')) {
+                    lastImportIndex = i;
+                }
+            }
+            if (lastImportIndex >= 0) {
+                // Вставляем после последнего импорта
+                lines.splice(lastImportIndex + 1, 0, importStatement);
+            }
+            else {
+                // Вставляем в начало файла
+                lines.unshift(importStatement);
+            }
+            content = lines.join('\n');
+        }
+        // 3. Обновляем список таблиц
         const tablesArray = tables.map(t => `'${t}'`).join(', ');
         content = content.replace(/\/\/ @db-tables:start\s*\n.*?const dbTables.*?=.*?\[.*?\];.*?\n\/\/ @db-tables:end/s, `// @db-tables:start\nconst dbTables: string[] = [${tablesArray}];\n// @db-tables:end`);
-        // 2. Добавляем/обновляем секцию с тестовыми данными
-        const dataSection = this.generateTestDataSection(testData);
-        // Ищем существующую секцию
+        // 4. Удаляем старую секцию с данными внутри теста (если есть)
         if (content.includes('// @test-data:start')) {
-            content = content.replace(/\/\/ @test-data:start[\s\S]*?\/\/ @test-data:end/, dataSection);
+            content = content.replace(/\/\/ @test-data:start[\s\S]*?\/\/ @test-data:end/, `// Данные импортированы из ${dataImportPath}`);
         }
-        else {
-            // Добавляем после dbTables
-            const insertPos = content.indexOf('// @db-tables:end') + '// @db-tables:end'.length;
-            content = content.slice(0, insertPos) + '\n\n' + dataSection + content.slice(insertPos);
-        }
-        // 3. Сохраняем файл
+        // 5. Сохраняем файл
         fs.writeFileSync(this.config.testFilePath, content);
     }
     /**
-     * Генерирует секцию с тестовыми данными
+     * Создает отдельный файл с тестовыми данными
+     */
+    async createTestDataFile(testFilePath, testData) {
+        const testDir = path.dirname(testFilePath);
+        const testFileName = path.basename(testFilePath, '.test.ts');
+        // Создаем папку testData если её нет
+        const testDataDir = path.join(testDir, 'testData');
+        if (!fs.existsSync(testDataDir)) {
+            fs.mkdirSync(testDataDir, { recursive: true });
+        }
+        // Имя файла с данными
+        const dataFileName = `${testFileName}.data.ts`;
+        const dataFilePath = path.join(testDataDir, dataFileName);
+        // Генерируем содержимое файла
+        const lines = [];
+        lines.push('/**');
+        lines.push(` * Тестовые данные для ${testFileName}`);
+        lines.push(' * Автоматически сгенерировано из БД');
+        lines.push(' * @generated');
+        lines.push(' */');
+        lines.push('');
+        // Экспортируем данные
+        lines.push('export const dbTestData = {');
+        const tableNames = Object.keys(testData);
+        tableNames.forEach((tableName, tableIndex) => {
+            const rows = testData[tableName];
+            // Экранируем имя таблицы
+            const tableKey = tableName.includes('.') || tableName.includes('-')
+                ? `'${tableName}'`
+                : tableName;
+            lines.push(`  ${tableKey}: [`);
+            rows.forEach((row, rowIndex) => {
+                const rowStr = JSON.stringify(row, null, 4);
+                const comma = rowIndex < rows.length - 1 ? ',' : '';
+                lines.push(`    ${rowStr}${comma}`);
+            });
+            const comma = tableIndex < tableNames.length - 1 ? ',' : '';
+            lines.push(`  ]${comma}`);
+        });
+        lines.push('} as const;');
+        lines.push('');
+        // Экспортируем вспомогательные функции для доступа к данным
+        lines.push('// Вспомогательные функции');
+        lines.push('');
+        tableNames.forEach(tableName => {
+            const cleanTableName = tableName.split('.').pop();
+            const functionName = `get${cleanTableName.charAt(0).toUpperCase()}${cleanTableName.slice(1)}Data`;
+            const tableKey = tableName.includes('.') || tableName.includes('-')
+                ? `'${tableName}'`
+                : tableName;
+            lines.push(`export const ${functionName} = () => dbTestData[${tableKey}];`);
+        });
+        lines.push('');
+        lines.push('// Получить случайную запись из таблицы');
+        tableNames.forEach(tableName => {
+            const cleanTableName = tableName.split('.').pop();
+            const functionName = `getRandom${cleanTableName.charAt(0).toUpperCase()}${cleanTableName.slice(1)}`;
+            const tableKey = tableName.includes('.') || tableName.includes('-')
+                ? `'${tableName}'`
+                : tableName;
+            lines.push(`export const ${functionName} = () => {`);
+            lines.push(`  const data = dbTestData[${tableKey}];`);
+            lines.push(`  return data[Math.floor(Math.random() * data.length)];`);
+            lines.push(`};`);
+            lines.push('');
+        });
+        // Записываем файл
+        fs.writeFileSync(dataFilePath, lines.join('\n'));
+        console.log(`  ✓ Создан файл с данными: ${path.relative(process.cwd(), dataFilePath)}`);
+        // Возвращаем относительный путь для импорта
+        return `./testData/${dataFileName.replace('.ts', '')}`;
+    }
+    /**
+     * Генерирует секцию с тестовыми данными (устаревший метод)
+     * @deprecated Используйте createTestDataFile вместо этого
      */
     generateTestDataSection(testData) {
         const lines = [];
@@ -1027,7 +1247,11 @@ class DatabaseAnalyzer {
         const tableNames = Object.keys(testData);
         tableNames.forEach((tableName, tableIndex) => {
             const rows = testData[tableName];
-            lines.push(`  ${tableName}: [`);
+            // Экранируем имя таблицы в кавычки (для schema.table)
+            const tableKey = tableName.includes('.') || tableName.includes('-')
+                ? `'${tableName}'`
+                : tableName;
+            lines.push(`  ${tableKey}: [`);
             rows.forEach((row, rowIndex) => {
                 const rowStr = JSON.stringify(row, null, 4);
                 const comma = rowIndex < rows.length - 1 ? ',' : '';

@@ -48,6 +48,11 @@ export interface DatabaseAnalyzerConfig {
      */
     authToken?: string;
     /**
+     * Поля которые нужно исключить при генерации данных для эмпирического теста (Этап 3)
+     * Например: ['id', 'created_at', 'updated_at']
+     */
+    excludeFieldsForEmpirical?: string[];
+    /**
      * Детализация логов для каждого этапа
      * @default { stage1: true, stage2: true, stage3: true }
      */
@@ -108,7 +113,16 @@ export declare class DatabaseAnalyzer {
      */
     private confirmWithRealCall;
     /**
-     * Генерирует уникальные тестовые данные
+     * Генерирует тестовые данные на основе существующих записей в БД
+     */
+    private generateTestDataFromExisting;
+    /**
+     * Генерирует fallback значение для поля
+     */
+    private generateFallbackValue;
+    /**
+     * Генерирует уникальные тестовые данные (устаревший метод)
+     * @deprecated Используйте generateTestDataFromExisting
      */
     private generateUniqueTestData;
     /**
@@ -124,7 +138,12 @@ export declare class DatabaseAnalyzer {
      */
     private updateTestFile;
     /**
-     * Генерирует секцию с тестовыми данными
+     * Создает отдельный файл с тестовыми данными
+     */
+    private createTestDataFile;
+    /**
+     * Генерирует секцию с тестовыми данными (устаревший метод)
+     * @deprecated Используйте createTestDataFile вместо этого
      */
     private generateTestDataSection;
 }
