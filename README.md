@@ -33,7 +33,7 @@ npm install
 
 **Step 3:** Generate API
 ```bash
-npx api-codegen generate
+npm run generate
 ```
 
 This creates files in `/api`:
@@ -102,10 +102,10 @@ await analyzeAndGenerateTestData({
 
 ```bash
 # Use default config (codegen.config.json)
-npx api-codegen generate
+npm run generate
 
 # Use custom config
-npx api-codegen generate --config=./config/my-config.json
+npm run generate --config=./config/my-config.json
 
 # Show help
 npx api-codegen --help
@@ -182,7 +182,7 @@ EOF
                 '''
                 
                 // Generate
-                sh 'npx api-codegen generate'
+                sh 'npm run generate'
             }
         }
         
@@ -222,7 +222,7 @@ echo "📥 Installing dependencies..."
 npm install
 
 echo "🔧 Generating API from OpenAPI spec..."
-npx api-codegen generate --config=codegen.config.json
+npm run generate --config=codegen.config.json
 
 echo "🔨 Building package..."
 npm run build
@@ -353,7 +353,7 @@ await analyzeAndGenerateTestData({
 ### CLI
 
 ```bash
-npx api-codegen generate [options]
+npm run generate [options]
 
 Options:
   --config=<path>      Path to config file (default: codegen.config.json)
@@ -414,7 +414,7 @@ await analyzeAndGenerateTestData({
 ├─────────────────────────────────────────────────────────────┤
 │ 1. git clone api-codegen                                    │
 │ 2. npm install                                              │
-│ 3. npx api-codegen generate  → creates /api/*.ts           │
+│ 3. npm run generate  → creates /api/*.ts           │
 │ 4. npm run build             → creates /dist/*.js          │
 │ 5. npm publish               → publishes EVERYTHING        │
 │                                                              │
@@ -465,7 +465,7 @@ Make sure:
 
 Use `npx`:
 ```bash
-npx api-codegen generate
+npm run generate
 ```
 
 ## 📝 License

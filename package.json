@@ -20,7 +20,9 @@
     "dev": "tsc --watch",
     "test": "node dist/example.js",
     "prepublishOnly": "npm run build",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "generate": "node scripts/generate.js",
+    "generate:help": "node scripts/generate.js --help"
   },
   "keywords": [
     "openapi",
