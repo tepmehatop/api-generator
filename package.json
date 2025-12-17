@@ -1,14 +1,26 @@
 {
-  "name": "openapi-typescript-generator",
+  "name": "@your-company/api-codegen",
   "version": "1.0.0",
-  "description": "Advanced OpenAPI to TypeScript generator for Playwright tests",
+  "description": "Advanced OpenAPI to TypeScript API client generator with automatic test generation and database integration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "api-codegen": "./bin/cli.js"
+  },
+  "files": [
+    "dist/**/*",
+    "api/**/*",
+    "bin/**/*",
+    "README.md",
+    "LICENSE",
+    "tsconfig.json"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "node dist/example.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "clean": "rm -rf dist"
   },
   "keywords": [
     "openapi",
@@ -16,11 +28,23 @@
     "typescript",
     "api",
     "generator",
+    "codegen",
     "playwright",
-    "testing"
+    "testing",
+    "test-automation",
+    "database-analyzer",
+    "api-client"
   ],
-  "author": "",
+  "author": "Your Company",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-company/api-codegen.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-company/api-codegen/issues"
+  },
+  "homepage": "https://github.com/your-company/api-codegen#readme",
   "dependencies": {
     "axios": "^1.6.0"
   },
@@ -28,7 +52,14 @@
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   },
+  "peerDependencies": {
+    "axios": "^1.6.0"
+  },
   "engines": {
     "node": ">=16.0.0"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://your-internal-npm-registry.com/"
   }
 }

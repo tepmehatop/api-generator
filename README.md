@@ -1,438 +1,477 @@
-# OpenAPI TypeScript Generator
+# @your-company/api-codegen
 
-Продвинутый генератор TypeScript API клиента из OpenAPI спецификаций для использования в автотестах Playwright.
+Complete solution for API client generation, test automation, and database integration - all in one package!
 
-## ✨ Особенности
+## 📦 What's Inside
 
-- 🚀 **Поддержка OpenAPI 2.0, 3.0 и 3.1** - работает с любой версией спецификации
-- 📦 **Модульная структура** - отдельный файл для каждого тега
-- 🔤 **Транслитерация** - автоматическое преобразование русских названий в английские
-- 🎯 **Умное разделение типов** - базовые DTO в отдельном файле, специфичные - в файлах тегов
-- 💪 **Type-safe** - полная типизация для TypeScript
-- 🔌 **Axios из коробки** - готовый HTTP клиент с обработкой ошибок
-- 🎨 **Чистый код** - читаемый и поддерживаемый сгенерированный код
+This package contains:
+1. **API Generator** - Generate TypeScript API clients from OpenAPI specs
+2. **Test Generator** - Create Playwright tests automatically
+3. **Database Analyzer** - Extract real data from DB for tests
+4. **Generated API Methods** - Ready-to-use API client (in `/api` folder)
 
-## 📦 Установка
+## 🚀 Quick Start
 
+### For DevOps (Jenkins - Generate API Client)
+
+**Step 1:** Clone this repository
 ```bash
-npm install --save-dev openapi-typescript-generator
-```
-
-Или используйте локально в проекте:
-
-```bash
-# Клонируйте репозиторий
-git clone <repo-url>
-cd api-generator
-
-# Установите зависимости
+git clone https://github.com/your-company/api-codegen.git
+cd api-codegen
 npm install
+```
 
-# Соберите проект
+**Step 2:** Create config file `codegen.config.json`:
+```json
+{
+  "specUrl": "https://api.example.com/openapi.json",
+  "outputDir": "./api",
+  "httpClient": "axios",
+  "baseUrl": "process.env.API_BASE_URL"
+}
+```
+
+**Step 3:** Generate API
+```bash
+npx api-codegen generate
+```
+
+This creates files in `/api`:
+- `orders.api.ts` - API methods
+- `orders.types.ts` - TypeScript interfaces
+- `products.api.ts`
+- etc.
+
+**Step 4:** Build and publish
+```bash
 npm run build
+npm publish
 ```
 
-## 🚀 Быстрый старт
+### For QA (Use in Tests)
 
-### Базовое использование
+**Step 1:** Install package
+```bash
+npm install @your-company/api-codegen
+```
 
+**Step 2:** Use generated API methods
 ```typescript
-import { generateApi } from 'openapi-typescript-generator';
+// Import API methods from the package
+import { createOrder, getOrders } from '@your-company/api-codegen/api/orders.api';
+import type { CreateOrderRequest } from '@your-company/api-codegen/api/orders.types';
 
-await generateApi({
-  specUrl: 'https://api.example.com/openapi.json',
-  outputDir: './src/api/generated',
-});
-```
-
-### Полная конфигурация
-
-```typescript
-await generateApi({
-  // URL или путь к OpenAPI документу
-  specUrl: 'https://api.example.com/openapi.json',
-  
-  // Путь для выгрузки сгенерированных файлов
-  outputDir: './src/api/generated',
-  
-  // HTTP клиент (пока поддерживается только axios)
-  httpClient: 'axios',
-  
-  // Базовый URL для API запросов
-  baseUrl: 'https://api.example.com',
-  
-  // Генерировать обработчики ошибок
-  generateErrorHandlers: true,
-  
-  // Генерировать TypeScript типы
-  generateTypes: true,
-  
-  // Транслитерация русских названий
-  transliterateRussian: true,
-});
-```
-
-## 📁 Структура сгенерированных файлов
-
-После генерации вы получите следующую структуру:
-
-```
-generated/
-├── index.ts              # Главный файл экспорта
-├── http-client.ts        # Настроенный HTTP клиент
-├── base.types.ts         # Базовые DTO, используемые в нескольких модулях
-├── pet.api.ts            # API методы для тега "pet"
-├── store.api.ts          # API методы для тега "store"
-└── user.api.ts           # API методы для тега "user"
-```
-
-### Пример сгенерированного файла (pet.api.ts)
-
-```typescript
-import { httpClient } from './http-client';
-import { Category, Tag } from './base.types';
-
-/**
- * Типы для модуля: pet
- */
-
-export interface Pet {
-  id?: number;
-  category?: Category;
-  name: string;
-  photoUrls: string[];
-  tags?: Tag[];
-  status?: 'available' | 'pending' | 'sold';
-}
-
-export interface ApiResponse {
-  code?: number;
-  type?: string;
-  message?: string;
-}
-
-/**
- * API методы для: pet
- */
-
-/**
- * Add a new pet to the store
- */
-export async function addPet(body: Pet): Promise<void> {
-  const url = `/pet`;
-  const response = await httpClient.request({
-    method: 'POST',
-    url,
-    data: body,
-  });
-  return response.data;
-}
-
-/**
- * Find pet by ID
- * Returns a single pet
- */
-export async function getPetById(petId: number): Promise<Pet> {
-  const url = `/pet/${petId}`;
-  const response = await httpClient.request({
-    method: 'GET',
-    url,
-  });
-  return response.data;
-}
-```
-
-## 🎯 Использование в автотестах Playwright
-
-```typescript
-import { test, expect } from '@playwright/test';
-import { addPet, getPetById, Pet } from './api/generated';
-
-test('API Test: Create and Get Pet', async () => {
-  // Создаем питомца
-  const newPet: Pet = {
-    name: 'Doggie',
-    photoUrls: ['https://example.com/photo.jpg'],
-    status: 'available',
+// Use in your tests
+test('create order', async () => {
+  const request: CreateOrderRequest = {
+    productId: 123,
+    quantity: 2,
+    orderType: 'standard'
   };
   
-  await addPet(newPet);
-  
-  // Получаем питомца
-  const pet = await getPetById(123);
-  
-  // Проверяем данные
-  expect(pet.name).toBe('Doggie');
-  expect(pet.status).toBe('available');
-});
-
-test('API Test: Type checking', async () => {
-  // TypeScript проверит типы на этапе компиляции
-  const pet = await getPetById(123);
-  
-  // Автокомплит работает благодаря типизации
-  console.log(pet.name); // ✓
-  console.log(pet.unknownField); // ✗ Ошибка компиляции
+  const response = await createOrder(request);
+  expect(response.status).toBe(201);
 });
 ```
 
-## 🔧 Продвинутое использование
-
-### Использование в тесте с fixture
-
+**Step 3:** Generate tests
 ```typescript
-import { test as base } from '@playwright/test';
-import * as PetAPI from './api/generated/pet.api';
-import * as UserAPI from './api/generated/user.api';
+import { generateApiTests } from '@your-company/api-codegen';
 
-type Fixtures = {
-  petApi: typeof PetAPI;
-  userApi: typeof UserAPI;
-};
-
-const test = base.extend<Fixtures>({
-  petApi: async ({}, use) => {
-    await use(PetAPI);
-  },
-  userApi: async ({}, use) => {
-    await use(UserAPI);
-  },
-});
-
-test('Test with API fixtures', async ({ petApi, userApi }) => {
-  const pet = await petApi.getPetById(1);
-  const user = await userApi.getUserByName('john');
-  
-  expect(pet.name).toBeTruthy();
-  expect(user.username).toBe('john');
+await generateApiTests({
+  apiFilePath: './node_modules/@your-company/api-codegen/api/orders.api.ts',
+  outputDir: './tests/api/orders'
 });
 ```
 
-### Настройка HTTP клиента
-
+**Step 4:** Analyze database
 ```typescript
-import { httpClient } from './api/generated/http-client';
+import { analyzeAndGenerateTestData } from '@your-company/api-codegen';
+import { testDbConnect } from './helpers/dbConnection';
 
-// Добавляем токен авторизации
-httpClient.interceptors.request.use((config) => {
-  config.headers.Authorization = `Bearer ${process.env.API_TOKEN}`;
-  return config;
-});
-
-// Логирование запросов
-httpClient.interceptors.request.use((config) => {
-  console.log(`→ ${config.method?.toUpperCase()} ${config.url}`);
-  return config;
-});
-
-// Обработка ошибок
-httpClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    console.error('API Error:', {
-      url: error.config?.url,
-      status: error.response?.status,
-      data: error.response?.data,
-    });
-    return Promise.reject(error);
-  }
-);
+await analyzeAndGenerateTestData({
+  testFilePath: './tests/api/orders/createOrder.test.ts',
+  dbConnectionMethod: 'testDbConnect',
+  dbSchema: 'orders_schema'
+}, testDbConnect);
 ```
 
-## 🌍 Транслитерация
+## 📋 CLI Commands
 
-Генератор автоматически транслитерирует русские названия тегов:
+### Generate API
 
-| Оригинал | Имя файла |
-|----------|-----------|
-| Пользователи | `polzovateli.api.ts` |
-| Заказы | `zakazy.api.ts` |
-| Товары и услуги | `tovary-i-uslugi.api.ts` |
+```bash
+# Use default config (codegen.config.json)
+npx api-codegen generate
 
-## 📊 Работа с DTO
+# Use custom config
+npx api-codegen generate --config=./config/my-config.json
 
-### Базовые типы (base.types.ts)
-
-Типы, используемые в нескольких тегах, автоматически выносятся в `base.types.ts`:
-
-```typescript
-// base.types.ts
-export interface Category {
-  id?: number;
-  name?: string;
-}
-
-export interface Tag {
-  id?: number;
-  name?: string;
-}
+# Show help
+npx api-codegen --help
 ```
 
-### Специфичные типы
+### Config File Structure
 
-Типы, используемые только в одном теге, остаются в файле этого тега:
-
-```typescript
-// pet.api.ts
-export interface PetImage {
-  url: string;
-  description?: string;
-}
-```
-
-### Сравнение DTO в тестах
-
-```typescript
-import { Pet } from './api/generated';
-
-test('DTO validation', async () => {
-  const pet = await getPetById(1);
-  
-  // TypeScript проверит соответствие типов
-  const expectedStructure: Pet = {
-    id: 1,
-    name: 'Doggie',
-    photoUrls: [],
-  };
-  
-  // Проверяем актуальность полей
-  expect(Object.keys(pet).sort()).toEqual(
-    Object.keys(expectedStructure).sort()
-  );
-});
-```
-
-## 🔄 Обновление API
-
-Когда API обновляется, просто перезапустите генерацию:
-
-```typescript
-// В вашем тесте или setup файле
-import { generateApi } from 'openapi-typescript-generator';
-
-// Генерируем перед запуском тестов
-await generateApi({
-  specUrl: process.env.API_SPEC_URL || 'https://api.example.com/openapi.json',
-  outputDir: './src/api/generated',
-});
-```
-
-Или создайте npm скрипт:
+Create `codegen.config.json` in project root:
 
 ```json
 {
-  "scripts": {
-    "generate-api": "node scripts/generate-api.js",
-    "pretest": "npm run generate-api"
-  }
+  "specUrl": "https://api.example.com/openapi.json",
+  "outputDir": "./api",
+  "httpClient": "axios",
+  "baseUrl": "process.env.API_BASE_URL",
+  "authTokenVar": "process.env.AUTH_TOKEN",
+  "generateErrorHandlers": true,
+  "generateTypes": true,
+  "transliterateRussian": true,
+  "useClasses": false
 }
 ```
 
-## 🐛 Отладка
+**Parameters:**
+- `specUrl` - URL or path to OpenAPI spec (required)
+- `outputDir` - Where to generate files (default: `./api`)
+- `httpClient` - `axios` or `fetch` (default: `axios`)
+- `baseUrl` - Base URL for API calls
+- `authTokenVar` - Auth token variable name
+- `generateErrorHandlers` - Generate error handlers (default: `true`)
+- `generateTypes` - Generate TypeScript types (default: `true`)
+- `transliterateRussian` - Transliterate Russian tags (default: `true`)
+- `useClasses` - Use classes instead of functions (default: `false`)
 
-Генератор выводит подробную информацию в консоль:
+## 🔧 Jenkins Integration
+
+### Jenkinsfile Example
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        NPM_REGISTRY = 'https://your-internal-npm-registry.com/'
+        NPM_TOKEN = credentials('npm-token')
+        OPENAPI_URL = 'https://api.example.com/openapi.json'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                git 'https://github.com/your-company/api-codegen.git'
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
+            }
+        }
+        
+        stage('Generate API') {
+            steps {
+                // Create config
+                sh '''
+                    cat > codegen.config.json << EOF
+{
+  "specUrl": "${OPENAPI_URL}",
+  "outputDir": "./api",
+  "httpClient": "axios",
+  "baseUrl": "process.env.API_BASE_URL"
+}
+EOF
+                '''
+                
+                // Generate
+                sh 'npx api-codegen generate'
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh 'npm run build'
+            }
+        }
+        
+        stage('Publish to NPM') {
+            steps {
+                sh '''
+                    echo "//your-npm-registry.com/:_authToken=${NPM_TOKEN}" > .npmrc
+                    npm publish --registry=${NPM_REGISTRY}
+                '''
+            }
+        }
+    }
+    
+    post {
+        always {
+            sh 'rm -f .npmrc'
+        }
+    }
+}
+```
+
+### Alternative: Using Script
+
+Create `scripts/generate-and-publish.sh`:
+
+```bash
+#!/bin/bash
+set -e
+
+echo "📥 Installing dependencies..."
+npm install
+
+echo "🔧 Generating API from OpenAPI spec..."
+npx api-codegen generate --config=codegen.config.json
+
+echo "🔨 Building package..."
+npm run build
+
+echo "📦 Publishing to NPM..."
+npm publish --registry=${NPM_REGISTRY}
+
+echo "✅ Done!"
+```
+
+Then in Jenkins:
+```bash
+chmod +x scripts/generate-and-publish.sh
+./scripts/generate-and-publish.sh
+```
+
+## 📁 Package Structure
+
+After generation and build:
 
 ```
-🚀 Начинаю генерацию API клиента...
-✓ OpenAPI спецификация загружена
-📋 Версия спецификации: 2.0
-✓ Спецификация распарсена
-✓ Код сгенерирован
-  → index.ts
-  → http-client.ts
-  → base.types.ts
-  → pet.api.ts
-  → store.api.ts
-  → user.api.ts
-✓ Файлы сохранены
-
-✨ Генерация завершена! Создано файлов: 6
-📁 Путь: ./generated/petstore
+@your-company/api-codegen/
+├── api/                          ← Generated API (TypeScript)
+│   ├── orders.api.ts
+│   ├── orders.types.ts
+│   ├── products.api.ts
+│   ├── products.types.ts
+│   └── base.types.ts
+│
+├── dist/                         ← Compiled generator
+│   ├── index.js
+│   ├── index.d.ts
+│   ├── generator.js
+│   ├── test-generator.js
+│   └── database-analyzer.js
+│
+├── bin/
+│   └── cli.js                    ← CLI command
+│
+├── package.json
+├── README.md
+└── codegen.config.json
 ```
 
-## 📝 Примеры
+## 🎯 Usage Examples
 
-### Пример 1: Swagger Petstore
+### Example 1: Use API Methods in Tests
 
 ```typescript
-await generateApi({
-  specUrl: 'https://petstore.swagger.io/v2/swagger.json',
-  outputDir: './generated/petstore',
-  httpClient: 'axios',
+import test, { expect } from '@playwright/test';
+import { createOrder, getOrderById, updateOrder } from '@your-company/api-codegen/api/orders.api';
+import type { CreateOrderRequest, UpdateOrderRequest } from '@your-company/api-codegen/api/orders.types';
+
+test.describe('Orders API', () => {
+  test('create and get order', async () => {
+    // Create
+    const createRequest: CreateOrderRequest = {
+      productId: 100,
+      quantity: 5,
+      orderType: 'express'
+    };
+    
+    const createResponse = await createOrder(createRequest);
+    expect(createResponse.status).toBe(201);
+    
+    const orderId = createResponse.data.id;
+    
+    // Get
+    const getResponse = await getOrderById(orderId);
+    expect(getResponse.status).toBe(200);
+    expect(getResponse.data.productId).toBe(100);
+  });
+  
+  test('update order', async () => {
+    const updateRequest: UpdateOrderRequest = {
+      quantity: 10,
+      status: 'completed'
+    };
+    
+    const response = await updateOrder(123, updateRequest);
+    expect(response.status).toBe(200);
+  });
 });
 ```
 
-### Пример 2: Локальный файл
+### Example 2: Generate Tests
 
 ```typescript
-await generateApi({
-  specUrl: './specs/my-api.json',
-  outputDir: './src/api',
+import { generateApiTests } from '@your-company/api-codegen';
+
+// Generate tests for orders API
+await generateApiTests({
+  apiFilePath: './node_modules/@your-company/api-codegen/api/orders.api.ts',
+  outputDir: './tests/api/orders',
+  generatePositiveTests: true,
+  generateNegativeTests: true,
+  generatePairwiseTests: true
 });
 ```
 
-### Пример 3: OpenAPI 3.1 с кастомным baseUrl
+### Example 3: Analyze Database
 
 ```typescript
-await generateApi({
-  specUrl: 'https://api.example.com/v3/openapi.json',
-  outputDir: './src/api/generated',
-  baseUrl: process.env.API_BASE_URL,
-  httpClient: 'axios',
+import { analyzeAndGenerateTestData } from '@your-company/api-codegen';
+import postgres from 'postgres';
+
+const testDbConnect = postgres({
+  host: process.env.DB_HOST,
+  database: process.env.DB_NAME
 });
+
+await analyzeAndGenerateTestData({
+  testFilePath: './tests/api/orders/createOrder.test.ts',
+  dbConnectionMethod: 'testDbConnect',
+  dbSchema: 'orders_schema',
+  samplesCount: 15,
+  
+  stages: {
+    schemaAnalysis: true,
+    foreignKeys: false,
+    empiricalTest: false
+  }
+}, testDbConnect);
 ```
 
-## 🤝 Сравнение с swagger-typescript-api
+## 🔑 API Reference
 
-| Функция | swagger-typescript-api | Этот генератор |
-|---------|------------------------|----------------|
-| OpenAPI 2.0 | ✅ | ✅ |
-| OpenAPI 3.0 | ✅ | ✅ |
-| OpenAPI 3.1 | ✅ | ✅ |
-| Модульная структура по тегам | ❌ | ✅ |
-| Транслитерация русских названий | ❌ | ✅ |
-| Автоматическое разделение базовых DTO | ❌ | ✅ |
-| Оптимизация для Playwright | ❌ | ✅ |
-| Простота использования | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+### CLI
 
-## 📚 API Reference
+```bash
+npx api-codegen generate [options]
+
+Options:
+  --config=<path>      Path to config file (default: codegen.config.json)
+  --help, -h           Show help
+```
 
 ### generateApi(config)
 
-Основная функция для генерации API клиента.
+Generate TypeScript API client from OpenAPI spec.
 
-**Параметры:**
+```typescript
+import { generateApi } from '@your-company/api-codegen';
 
-- `config.specUrl` (string, required) - URL или путь к OpenAPI документу
-- `config.outputDir` (string, required) - Путь для сохранения файлов
-- `config.httpClient` (string, optional) - HTTP клиент ('axios'). Default: 'axios'
-- `config.baseUrl` (string, optional) - Базовый URL для API
-- `config.generateErrorHandlers` (boolean, optional) - Генерировать обработчики ошибок. Default: true
-- `config.generateTypes` (boolean, optional) - Генерировать TypeScript типы. Default: true
-- `config.transliterateRussian` (boolean, optional) - Транслитерация русских названий. Default: true
-
-**Возвращает:** Promise<void>
-
-## 🛠️ Разработка
-
-```bash
-# Установка зависимостей
-npm install
-
-# Сборка
-npm run build
-
-# Разработка с watch mode
-npm run dev
-
-# Запуск примера
-npm test
+await generateApi({
+  specUrl: 'https://api.example.com/openapi.json',
+  outputDir: './api',
+  httpClient: 'axios',
+  baseUrl: 'process.env.API_BASE_URL'
+});
 ```
 
-## 📄 Лицензия
+### generateApiTests(config)
+
+Generate Playwright tests for API.
+
+```typescript
+import { generateApiTests } from '@your-company/api-codegen';
+
+await generateApiTests({
+  apiFilePath: './api/orders.api.ts',
+  outputDir: './tests/api/orders',
+  generatePositiveTests: true,
+  generateNegativeTests: true,
+  generatePairwiseTests: true
+});
+```
+
+### analyzeAndGenerateTestData(config, dbConnect)
+
+Analyze database and generate test data.
+
+```typescript
+import { analyzeAndGenerateTestData } from '@your-company/api-codegen';
+
+await analyzeAndGenerateTestData({
+  testFilePath: './tests/api/orders/createOrder.test.ts',
+  dbConnectionMethod: 'testDbConnect',
+  dbSchema: 'orders_schema',
+  samplesCount: 15
+}, testDbConnect);
+```
+
+## 📊 Workflow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ JENKINS (DevOps)                                            │
+├─────────────────────────────────────────────────────────────┤
+│ 1. git clone api-codegen                                    │
+│ 2. npm install                                              │
+│ 3. npx api-codegen generate  → creates /api/*.ts           │
+│ 4. npm run build             → creates /dist/*.js          │
+│ 5. npm publish               → publishes EVERYTHING        │
+│                                                              │
+│ Published Package Contains:                                 │
+│   ├── /api/*.ts       (generated API methods + types)      │
+│   ├── /dist/*.js      (generator tools)                    │
+│   └── /bin/cli.js     (CLI command)                        │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ TEST PROJECT (QA)                                           │
+├─────────────────────────────────────────────────────────────┤
+│ 1. npm install @your-company/api-codegen                    │
+│                                                              │
+│ 2. Use API methods:                                         │
+│    import { createOrder } from                              │
+│      '@your-company/api-codegen/api/orders.api'             │
+│                                                              │
+│ 3. Generate tests:                                          │
+│    import { generateApiTests } from                         │
+│      '@your-company/api-codegen'                            │
+│                                                              │
+│ 4. Analyze DB:                                              │
+│    import { analyzeAndGenerateTestData } from               │
+│      '@your-company/api-codegen'                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 🔍 Troubleshooting
+
+### Error: "Config file not found"
+
+Create `codegen.config.json` in project root:
+```bash
+cp codegen.config.example.json codegen.config.json
+# Edit the file with your values
+```
+
+### Error: "Cannot find module '@your-company/api-codegen/api/orders.api'"
+
+Make sure:
+1. Package is installed: `npm list @your-company/api-codegen`
+2. API was generated before publishing
+3. `/api` folder exists in node_modules
+
+### Error: "Command not found: api-codegen"
+
+Use `npx`:
+```bash
+npx api-codegen generate
+```
+
+## 📝 License
 
 MIT
 
-## 🙏 Благодарности
+## 🆘 Support
 
-Вдохновлено проектом [swagger-typescript-api](https://github.com/acacode/swagger-typescript-api)
+For issues and questions, contact your internal development team.

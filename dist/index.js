@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ApiGenerator = exports.generateApiTests = void 0;
+exports.ApiGenerator = exports.analyzeAndGenerateTestData = exports.generateApiTests = void 0;
 exports.generateApi = generateApi;
 const axios_1 = __importDefault(require("axios"));
 const fs = __importStar(require("fs"));
@@ -46,6 +46,9 @@ const generator_1 = require("./generator");
 // Экспорт функции генерации тестов
 var test_generator_1 = require("./test-generator");
 Object.defineProperty(exports, "generateApiTests", { enumerable: true, get: function () { return test_generator_1.generateApiTests; } });
+// Экспорт анализатора базы данных
+var database_analyzer_1 = require("./database-analyzer");
+Object.defineProperty(exports, "analyzeAndGenerateTestData", { enumerable: true, get: function () { return database_analyzer_1.analyzeAndGenerateTestData; } });
 /**
  * Основной класс для генерации API клиента из OpenAPI спецификации
  */

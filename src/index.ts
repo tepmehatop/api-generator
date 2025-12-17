@@ -8,6 +8,9 @@ import { transliterate } from './utils/transliterate';
 // Экспорт функции генерации тестов
 export { generateApiTests, ApiTestConfig } from './test-generator';
 
+// Экспорт анализатора базы данных
+export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';
+
 export interface GeneratorConfig {
   /**
    * URL или путь к OpenAPI документу (JSON)

@@ -1,4 +1,5 @@
 export { generateApiTests, ApiTestConfig } from './test-generator';
+export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';
 export interface GeneratorConfig {
     /**
      * URL или путь к OpenAPI документу (JSON)
