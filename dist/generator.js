@@ -304,6 +304,7 @@ class CodeGenerator {
         const functions = [];
         // Импорты
         imports.push("import { httpClient } from './http-client';");
+        imports.push("import type { AxiosResponse } from 'axios';");
         // Определяем какие базовые типы используются
         const usedBaseTypes = new Set();
         for (const op of operations) {
@@ -731,10 +732,13 @@ class CodeGenerator {
         // Ищем успешный ответ (200, 201, etc.)
         for (const [code, response] of Object.entries(operation.responses)) {
             if (code.startsWith('2') && response.schema) {
-                return this.schemaToTypeScript(response.schema);
+                const dataType = this.schemaToTypeScript(response.schema);
+                // Возвращаем AxiosResponse с типизированным data
+                return `AxiosResponse<${dataType}>`;
             }
         }
-        return 'void';
+        // Если нет схемы - возвращаем any
+        return 'AxiosResponse<any>';
     }
     /**
      * Генерирует index файл
