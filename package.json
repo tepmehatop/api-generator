@@ -8,6 +8,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./test-api": {
+      "types": "./dist/test-api/index.d.ts",
+      "default": "./dist/test-api/index.js"
+    },
+    "./test-api/*": {
+      "types": "./dist/test-api/*.d.ts",
+      "default": "./dist/test-api/*.js"
     }
   },
   "bin": {
@@ -22,14 +30,15 @@
   ],
   "scripts": {
     "build": "tsc",
+    "build:api": "tsc --project tsconfig.api.json",
     "dev": "tsc --watch",
     "test": "node dist/example.js",
-    "prepublishOnly": "npm run build && npm run update-exports",
+    "prepublishOnly": "npm run build && npm run update-exports && npm run build:api",
     "clean": "rm -rf dist",
     "generate": "node scripts/generate.js",
     "generate:help": "node scripts/generate.js --help",
     "update-exports": "node scripts/update-exports.cjs",
-    "postgenerate": "npm run update-exports"
+    "postgenerate": "npm run update-exports && npm run build:api"
   },
   "keywords": [
     "openapi",
