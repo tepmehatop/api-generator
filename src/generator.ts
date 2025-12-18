@@ -912,58 +912,57 @@ export class CodeGenerator {
   }
   
   /**
-   * Генерирует index файл с инструкциями (БЕЗ export *)
+   * Генерирует index файл с явными экспортами (только функции, без локальных типов)
    */
   private generateIndexFile(tags: string[]): GeneratedFile {
     const lines: string[] = [];
     
     lines.push('/**');
-    lines.push(' * API Client - Generated from OpenAPI specification');
+    lines.push(' * Barrel export для всех API методов');
+    lines.push(' * Типы импортируйте из конкретных файлов для избежания конфликтов');
     lines.push(' * ');
-    lines.push(' * ⚠️ ВАЖНО: Импортируйте методы напрямую из файлов, не используйте barrel export');
+    lines.push(' * @example');
+    lines.push(' * // Методы (автоимпорт работает)');
+    lines.push(' * import { createOrder, getOrderById } from "@company/api-codegen/orders"');
     lines.push(' * ');
-    lines.push(' * Причина: При большом количестве типов возникают конфликты имён.');
-    lines.push(' * TypeScript не может различить одинаковые имена типов из разных файлов.');
-    lines.push(' * ');
-    lines.push(' * ✅ Правильно:');
-    lines.push(' * ```typescript');
-    lines.push(' * import { createOrder } from "@company/api-codegen/orders/orders.api"');
-    lines.push(' * import { getProduct } from "@company/api-codegen/orders/products.api"');
-    lines.push(' * ```');
-    lines.push(' * ');
-    lines.push(' * ❌ Неправильно:');
-    lines.push(' * ```typescript');
-    lines.push(' * import { createOrder } from "@company/api-codegen/orders"  // Не работает!');
-    lines.push(' * ```');
-    lines.push(' * ');
-    lines.push(' * Доступные файлы:');
-    
-    // Список файлов
-    if (this.baseSchemas.size > 0) {
-      lines.push(' * - base.types.ts - Базовые типы используемые во всех API');
-    }
-    
-    for (const tag of tags) {
-      const filename = this.getTagFilename(tag);
-      const displayName = tag.charAt(0).toUpperCase() + tag.slice(1);
-      lines.push(` * - ${filename} - ${displayName} API методы`);
-    }
-    
+    lines.push(' * // Типы (импортируйте из файлов)');
+    lines.push(' * import type { CreateOrderRequest } from "@company/api-codegen/orders/orders.api"');
     lines.push(' */\n');
     
-    lines.push('// Этот файл специально пустой чтобы избежать конфликтов типов.');
-    lines.push('// Импортируйте методы напрямую из соответствующих файлов.\n');
-    
-    // Экспортируем только базовые типы если они есть
+    // Экспорт базовых типов (они безопасны)
     if (this.baseSchemas.size > 0) {
-      lines.push('// Базовые типы (безопасно экспортировать)');
-      lines.push("export * from './base.types';\n");
+      lines.push("// Базовые типы");
+      lines.push("export * from './base.types';");
+      lines.push('');
     }
     
-    lines.push('// Для импорта API методов используйте прямые импорты:');
+    // Для каждого тега экспортируем ТОЛЬКО функции
     for (const tag of tags) {
       const filename = this.getTagFilename(tag).replace('.ts', '');
-      lines.push(`// import { ... } from './${filename}';`);
+      const displayName = tag.charAt(0).toUpperCase() + tag.slice(1);
+      
+      lines.push(`// ${displayName} API - только методы`);
+      lines.push(`export { `);
+      
+      // Находим все операции для этого тега
+      const operations = this.spec.paths.filter(p => p.tags.includes(tag));
+      const functionNames: string[] = [];
+      
+      for (const op of operations) {
+        const funcName = toCamelCase(op.operationId);
+        functionNames.push(funcName);
+      }
+      
+      // Экспортируем функции явно
+      lines.push(`  ${functionNames.join(',\n  ')}`);
+      lines.push(`} from './${filename}';`);
+      lines.push('');
+    }
+    
+    lines.push('// Для типов импортируйте напрямую из файлов:');
+    for (const tag of tags) {
+      const filename = this.getTagFilename(tag).replace('.ts', '');
+      lines.push(`// import type { YourType } from './${filename}';`);
     }
     
     lines.push('');

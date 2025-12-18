@@ -110,7 +110,7 @@ export declare class CodeGenerator {
      */
     private generateReturnType;
     /**
-     * Генерирует index файл с инструкциями (БЕЗ export *)
+     * Генерирует index файл с явными экспортами (только функции, без локальных типов)
      */
     private generateIndexFile;
     /**
