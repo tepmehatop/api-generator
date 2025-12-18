@@ -9,13 +9,13 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./test-api": {
-      "types": "./dist/test-api/index.d.ts",
-      "default": "./dist/test-api/index.js"
+    "./test-export": {
+      "types": "./dist/test-export/index.d.ts",
+      "default": "./dist/test-export/index.js"
     },
-    "./test-api/*": {
-      "types": "./dist/test-api/*.d.ts",
-      "default": "./dist/test-api/*.js"
+    "./test-export/*": {
+      "types": "./dist/test-export/*.d.ts",
+      "default": "./dist/test-export/*.js"
     }
   },
   "bin": {
