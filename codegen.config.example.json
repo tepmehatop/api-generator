@@ -1,6 +1,6 @@
 {
   "specUrl": "https://api.example.com/openapi.json",
-  "outputDir": "./api",
+  "outputDir": "./dist/api",
   "httpClient": "axios",
   "baseUrl": "process.env.API_BASE_URL",
   "authTokenVar": "process.env.AUTH_TOKEN",

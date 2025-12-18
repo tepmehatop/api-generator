@@ -4,12 +4,17 @@
   "description": "Advanced OpenAPI to TypeScript API client generator with automatic test generation and database integration",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "bin": {
     "api-codegen": "./bin/cli.js"
   },
   "files": [
     "dist/**/*",
-    "api/**/*",
     "bin/**/*",
     "README.md",
     "LICENSE",
@@ -19,10 +24,12 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "node dist/example.js",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "npm run build && npm run update-exports",
     "clean": "rm -rf dist",
     "generate": "node scripts/generate.js",
-    "generate:help": "node scripts/generate.js --help"
+    "generate:help": "node scripts/generate.js --help",
+    "update-exports": "node scripts/update-exports.cjs",
+    "postgenerate": "npm run update-exports"
   },
   "keywords": [
     "openapi",

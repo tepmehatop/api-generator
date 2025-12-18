@@ -105,7 +105,7 @@ class CodeGenerator {
         for (const [tag, operations] of operationsByTag.entries()) {
             files.push(this.generateTagFile(tag, operations));
         }
-        // Генерируем index файл
+        // Генерируем index файл (barrel export для всех API)
         files.push(this.generateIndexFile(Array.from(operationsByTag.keys())));
         // Генерируем HTTP client helper
         files.push(this.generateHttpClientFile());
@@ -742,15 +742,23 @@ class CodeGenerator {
     generateIndexFile(tags) {
         const lines = [];
         lines.push('/**');
-        lines.push(' * Главный файл экспорта API клиента');
+        lines.push(' * Barrel export для всех API методов и типов');
+        lines.push(' * Этот файл позволяет IDE автоматически импортировать методы и типы');
+        lines.push(' * @example');
+        lines.push(' * import { createOrder, getOrderById } from "@company/api-codegen/dist/api"');
+        lines.push(' * import type { CreateOrderRequest, OrderResponse } from "@company/api-codegen/dist/api"');
         lines.push(' */\n');
         // Экспорт базовых типов
         if (this.baseSchemas.size > 0) {
+            lines.push("// Базовые типы");
             lines.push("export * from './base.types';");
+            lines.push('');
         }
-        // Экспорт каждого тега
+        // Экспорт каждого тега (методы и типы)
         for (const tag of tags) {
             const filename = this.getTagFilename(tag).replace('.ts', '');
+            const displayName = tag.charAt(0).toUpperCase() + tag.slice(1);
+            lines.push(`// ${displayName} API`);
             lines.push(`export * from './${filename}';`);
         }
         lines.push('');

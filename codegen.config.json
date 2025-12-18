@@ -1,6 +1,6 @@
 {
   "specUrl": "https://petstore3.swagger.io/api/v3/openapi.json",
-  "outputDir": "./api",
+  "outputDir": "./dist/api",
   "httpClient": "axios",
   "baseUrl": "process.env.API_BASE_URL",
   "generateTypes": true,
