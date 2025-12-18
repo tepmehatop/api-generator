@@ -388,7 +388,7 @@ export class CodeGenerator {
     }
     
     if (usedBaseTypes.size > 0) {
-      imports.push(`import { ${Array.from(usedBaseTypes).join(', ')} } from './base.types';`);
+      imports.push(`import type { ${Array.from(usedBaseTypes).join(', ')} } from './base.types';`);
     }
     
     imports.push('');
