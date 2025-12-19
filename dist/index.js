@@ -164,16 +164,17 @@ class ApiGenerator {
         }
         // Сохраняем каждый файл
         for (const file of files) {
-            // README файлы сохраняем в корень проекта (на уровень выше outputDir)
-            const isReadme = file.filename.endsWith('ReadmeApi.md');
+            // API_README.md сохраняем в outputDir (попадёт в NPM пакет)
+            // CompareReadme.md сохраняем в корень (для анализа изменений)
+            const isCompareReadme = file.filename.endsWith('CompareReadme.md');
             let filePath;
-            if (isReadme) {
-                // Сохраняем в корень проекта
+            if (isCompareReadme) {
+                // Сохраняем в корень проекта для анализа
                 filePath = path.join(process.cwd(), file.filename);
                 console.log(`  → ${file.filename} (в корень)`);
             }
             else {
-                // Обычные файлы в outputDir
+                // Все остальные файлы (включая API_README.md) в outputDir
                 filePath = path.join(outputDir, file.filename);
                 console.log(`  → ${file.filename}`);
             }

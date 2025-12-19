@@ -128,10 +128,10 @@ export class CodeGenerator {
     // Генерируем файл для каждого тега
     for (const [tag, operations] of operationsByTag.entries()) {
       files.push(this.generateTagFile(tag, operations));
-      
-      // Генерируем README для каждого микросервиса
-      files.push(this.generateApiReadme(tag, operations));
     }
+    
+    // Генерируем ОДИН общий README для всего сервиса со всеми тегами
+    files.push(this.generateCombinedApiReadme(operationsByTag));
     
     // Генерируем index файл (barrel export для всех API)
     files.push(this.generateIndexFile(Array.from(operationsByTag.keys())));
@@ -1096,123 +1096,144 @@ export class CodeGenerator {
   /**
    * Генерирует README с документацией API для микросервиса
    */
-  private generateApiReadme(tag: string, operations: PathItem[]): GeneratedFile {
+  /**
+   * Генерирует ОДИН общий README со всеми тегами (разделами)
+   */
+  private generateCombinedApiReadme(operationsByTag: Map<string, PathItem[]>): GeneratedFile {
     const lines: string[] = [];
-    const displayName = tag.charAt(0).toUpperCase() + tag.slice(1);
-    const apiFileName = this.getTagFilename(tag);
     
-    lines.push(`# ${displayName} API Documentation`);
+    // Заголовок
+    lines.push(`# API Documentation`);
     lines.push('');
-    lines.push(`Автоматически сгенерированная документация для микросервиса **${displayName}**.`);
+    lines.push(`Автоматически сгенерированная документация API.`);
     lines.push('');
-    lines.push('## Endpoints');
+    lines.push('---');
     lines.push('');
     
-    // Создаём таблицу
-    lines.push('| Endpoint | HTTP Method | Function Name | Request DTO | Response DTO | File Name |');
-    lines.push('|----------|-------------|---------------|-------------|--------------|-----------|');
+    // Оглавление
+    lines.push('## Оглавление');
+    lines.push('');
+    for (const [tag] of operationsByTag) {
+      const displayName = tag.charAt(0).toUpperCase() + tag.slice(1);
+      const anchor = tag.toLowerCase().replace(/\s+/g, '-');
+      lines.push(`- [${displayName}](#${anchor})`);
+    }
+    lines.push('');
+    lines.push('---');
+    lines.push('');
     
-    for (const operation of operations) {
-      const endpoint = operation.path;
-      const method = operation.method.toUpperCase();
-      const funcName = toCamelCase(operation.operationId);
+    // Проходим по каждому тегу
+    for (const [tag, operations] of operationsByTag) {
+      const displayName = tag.charAt(0).toUpperCase() + tag.slice(1);
+      const apiFileName = this.getTagFilename(tag);
       
-      // Находим Request DTO
-      let requestDto = '-';
-      if (operation.requestBody) {
-        const content = operation.requestBody.content;
-        if (content) {
-          // Берём первый content-type (обычно application/json)
-          const firstContentType = Object.values(content)[0];
-          if (firstContentType && firstContentType.schema) {
-            requestDto = this.extractSchemaName(firstContentType.schema);
+      lines.push(`## ${displayName}`);
+      lines.push('');
+      
+      // Таблица endpoints
+      lines.push('### Endpoints');
+      lines.push('');
+      lines.push('| Endpoint | HTTP Method | Function Name | Request DTO | Response DTO | File Name |');
+      lines.push('|----------|-------------|---------------|-------------|--------------|-----------|');
+      
+      for (const operation of operations) {
+        const endpoint = operation.path;
+        const method = operation.method.toUpperCase();
+        const funcName = toCamelCase(operation.operationId);
+        
+        // Находим Request DTO
+        let requestDto = '-';
+        if (operation.requestBody) {
+          const content = operation.requestBody.content;
+          if (content) {
+            const firstContentType = Object.values(content)[0];
+            if (firstContentType && firstContentType.schema) {
+              requestDto = this.extractSchemaName(firstContentType.schema);
+            }
           }
         }
-      }
-      
-      // Находим Response DTO
-      let responseDto = '-';
-      for (const [code, response] of Object.entries(operation.responses)) {
-        if (code.startsWith('2') && response.schema) {
-          responseDto = this.extractSchemaName(response.schema);
-          break;
+        
+        // Находим Response DTO
+        let responseDto = '-';
+        for (const [code, response] of Object.entries(operation.responses)) {
+          if (code.startsWith('2') && response.schema) {
+            responseDto = this.extractSchemaName(response.schema);
+            break;
+          }
         }
+        
+        lines.push(`| \`${endpoint}\` | ${method} | \`${funcName}\` | \`${requestDto}\` | \`${responseDto}\` | ${apiFileName} |`);
       }
       
-      lines.push(`| \`${endpoint}\` | ${method} | \`${funcName}\` | \`${requestDto}\` | \`${responseDto}\` | ${apiFileName} |`);
-    }
-    
-    lines.push('');
-    lines.push('## Использование');
-    lines.push('');
-    lines.push('```typescript');
-    lines.push(`import { ${operations.slice(0, 3).map(op => toCamelCase(op.operationId)).join(', ')} } from '@your-company/api-codegen/${tag}';`);
-    lines.push('');
-    lines.push('// Пример:');
-    if (operations.length > 0) {
-      const firstOp = operations[0];
-      const funcName = toCamelCase(firstOp.operationId);
+      lines.push('');
       
-      lines.push(`const response = await ${funcName}(${firstOp.requestBody ? 'requestData' : ''});`);
-      lines.push('console.log(response.status); // 200, 201, etc.');
-      lines.push('console.log(response.data);   // Типизированные данные');
-    }
-    lines.push('```');
-    lines.push('');
-    lines.push('## Типы данных');
-    lines.push('');
-    lines.push('Все типы доступны для импорта:');
-    lines.push('');
-    lines.push('```typescript');
-    lines.push(`import type {`);
-    
-    // Собираем уникальные типы
-    const allTypes = new Set<string>();
-    for (const op of operations) {
-      if (op.requestBody) {
-        const content = op.requestBody.content;
-        if (content) {
-          const firstContentType = Object.values(content)[0];
-          if (firstContentType && firstContentType.schema) {
-            const typeName = this.extractSchemaName(firstContentType.schema);
+      // Пример использования
+      lines.push('### Использование');
+      lines.push('');
+      lines.push('```typescript');
+      const methodNames = operations.slice(0, 3).map(op => toCamelCase(op.operationId));
+      lines.push(`import { ${methodNames.join(', ')} } from '@your-company/api-codegen/${tag}';`);
+      lines.push('');
+      
+      if (operations.length > 0) {
+        const firstOp = operations[0];
+        const funcName = toCamelCase(firstOp.operationId);
+        lines.push('// Пример:');
+        lines.push(`const response = await ${funcName}(${firstOp.requestBody ? 'requestData' : ''});`);
+        lines.push('console.log(response.status); // 200, 201, etc.');
+        lines.push('console.log(response.data);   // Типизированные данные');
+      }
+      
+      lines.push('```');
+      lines.push('');
+      
+      // Типы данных
+      const allTypes = new Set<string>();
+      for (const op of operations) {
+        if (op.requestBody) {
+          const content = op.requestBody.content;
+          if (content) {
+            const firstContentType = Object.values(content)[0];
+            if (firstContentType && firstContentType.schema) {
+              const typeName = this.extractSchemaName(firstContentType.schema);
+              if (typeName !== '-') allTypes.add(typeName);
+            }
+          }
+        }
+        for (const [code, response] of Object.entries(op.responses)) {
+          if (code.startsWith('2') && response.schema) {
+            const typeName = this.extractSchemaName(response.schema);
             if (typeName !== '-') allTypes.add(typeName);
           }
         }
       }
-      for (const [code, response] of Object.entries(op.responses)) {
-        if (code.startsWith('2') && response.schema) {
-          const typeName = this.extractSchemaName(response.schema);
-          if (typeName !== '-') allTypes.add(typeName);
-        }
+      
+      if (allTypes.size > 0) {
+        lines.push('### Типы данных');
+        lines.push('');
+        lines.push('```typescript');
+        lines.push(`import type {`);
+        
+        const typesList = Array.from(allTypes).slice(0, 10);
+        typesList.forEach((type, index) => {
+          const comma = index < typesList.length - 1 ? ',' : '';
+          lines.push(`  ${type}${comma}`);
+        });
+        
+        lines.push(`} from '@your-company/api-codegen/${tag}/${apiFileName.replace('.ts', '')}';`);
+        lines.push('```');
+        lines.push('');
       }
+      
+      lines.push('---');
+      lines.push('');
     }
     
-    const typesList = Array.from(allTypes).slice(0, 5);
-    typesList.forEach((type, index) => {
-      const comma = index < typesList.length - 1 ? ',' : '';
-      lines.push(`  ${type}${comma}`);
-    });
-    
-    lines.push(`} from '@your-company/api-codegen/${tag}/${apiFileName.replace('.ts', '')}';`);
-    lines.push('```');
+    lines.push('*Сгенерировано автоматически из OpenAPI спецификации*');
     lines.push('');
-    lines.push('---');
-    lines.push('');
-    lines.push(`*Сгенерировано автоматически из OpenAPI спецификации*`);
-    lines.push('');
-    
-    // Имя файла README
-    let readmeFileName = tag;
-    if (this.config.transliterateRussian && /[а-яА-Я]/.test(tag)) {
-      readmeFileName = transliterate(tag);
-    }
-    readmeFileName = readmeFileName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '');
     
     return {
-      filename: `${readmeFileName}ReadmeApi.md`,
+      filename: 'API_README.md',
       content: lines.join('\n')
     };
   }

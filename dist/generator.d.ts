@@ -124,7 +124,10 @@ export declare class CodeGenerator {
     /**
      * Генерирует README с документацией API для микросервиса
      */
-    private generateApiReadme;
+    /**
+     * Генерирует ОДИН общий README со всеми тегами (разделами)
+     */
+    private generateCombinedApiReadme;
     /**
      * Извлекает имя схемы из объекта схемы
      */
