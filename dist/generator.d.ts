@@ -121,6 +121,14 @@ export declare class CodeGenerator {
      * Получает имя файла для тега
      */
     private getTagFilename;
+    /**
+     * Генерирует README с документацией API для микросервиса
+     */
+    private generateApiReadme;
+    /**
+     * Извлекает имя схемы из объекта схемы
+     */
+    private extractSchemaName;
 }
 export {};
 //# sourceMappingURL=generator.d.ts.map

@@ -77,20 +77,32 @@ for (const folder of apiFolders) {
   const hasIndex = fs.existsSync(indexPath);
   
   if (hasIndex) {
-    // Barrel export через index.ts
+    // Barrel export через index.ts - БЕЗ префикса dist
     packageExports[`./${folder}`] = {
+      "types": `./dist/${folder}/index.d.ts`,
+      "default": `./dist/${folder}/index.js`
+    };
+    
+    // Barrel export через index.ts - С префиксом dist (для совместимости)
+    packageExports[`./dist/${folder}`] = {
       "types": `./dist/${folder}/index.d.ts`,
       "default": `./dist/${folder}/index.js`
     };
   }
   
-  // Прямой доступ к файлам
+  // Прямой доступ к файлам - БЕЗ префикса dist
   packageExports[`./${folder}/*`] = {
     "types": `./dist/${folder}/*.d.ts`,
     "default": `./dist/${folder}/*.js`
   };
   
-  console.log(`  ✓ Добавлен export: ./${folder}`);
+  // Прямой доступ к файлам - С префиксом dist (для совместимости)
+  packageExports[`./dist/${folder}/*`] = {
+    "types": `./dist/${folder}/*.d.ts`,
+    "default": `./dist/${folder}/*.js`
+  };
+  
+  console.log(`  ✓ Добавлен export: ./${folder} и ./dist/${folder}`);
 }
 
 // Обновляем package.json

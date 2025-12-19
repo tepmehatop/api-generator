@@ -93,10 +93,50 @@ class ApiGenerator {
             console.log('✓ Файлы сохранены');
             console.log(`\n✨ Генерация завершена! Создано файлов: ${files.length}`);
             console.log(`📁 Путь: ${this.config.outputDir}`);
+            // 5. Сравнение с предыдущей версией (если указана)
+            if (this.config.prevPackage) {
+                console.log('\n🔍 Начинаю сравнение с предыдущей версией...');
+                await this.compareWithPrevious();
+            }
         }
         catch (error) {
             console.error('❌ Ошибка при генерации:', error);
             throw error;
+        }
+    }
+    /**
+     * Сравнивает текущую версию с предыдущей
+     */
+    async compareWithPrevious() {
+        const { ApiComparator } = await Promise.resolve().then(() => __importStar(require('./comparator')));
+        const comparator = new ApiComparator();
+        try {
+            // Извлекаем имя сервиса из outputDir
+            const serviceName = path.basename(this.config.outputDir);
+            // Скачиваем и распаковываем предыдущую версию
+            const oldDistPath = await comparator.downloadAndExtractPackage(this.config.prevPackage);
+            // Извлекаем информацию из обеих версий
+            console.log('📊 Извлекаю информацию из старой версии...');
+            const oldInfo = comparator.extractApiInfo(oldDistPath, serviceName);
+            console.log('📊 Извлекаю информацию из новой версии...');
+            const newDistPath = path.join(process.cwd(), 'dist');
+            const newInfo = comparator.extractApiInfo(newDistPath, serviceName);
+            // Сравниваем
+            console.log('🔄 Сравниваю версии...');
+            const result = comparator.compare(oldInfo, newInfo, serviceName);
+            // Генерируем отчёт
+            const report = comparator.generateComparisonReport(result);
+            // Сохраняем отчёт в корень
+            const reportPath = path.join(process.cwd(), `${serviceName}CompareReadme.md`);
+            fs.writeFileSync(reportPath, report, 'utf-8');
+            console.log(`✅ Отчёт о сравнении сохранён: ${serviceName}CompareReadme.md`);
+            // Очищаем временные файлы
+            comparator.cleanup();
+        }
+        catch (error) {
+            console.error('❌ Ошибка при сравнении версий:', error);
+            comparator.cleanup();
+            // Не прерываем генерацию из-за ошибки сравнения
         }
     }
     /**
@@ -124,9 +164,20 @@ class ApiGenerator {
         }
         // Сохраняем каждый файл
         for (const file of files) {
-            const filePath = path.join(outputDir, file.filename);
+            // README файлы сохраняем в корень проекта (на уровень выше outputDir)
+            const isReadme = file.filename.endsWith('ReadmeApi.md');
+            let filePath;
+            if (isReadme) {
+                // Сохраняем в корень проекта
+                filePath = path.join(process.cwd(), file.filename);
+                console.log(`  → ${file.filename} (в корень)`);
+            }
+            else {
+                // Обычные файлы в outputDir
+                filePath = path.join(outputDir, file.filename);
+                console.log(`  → ${file.filename}`);
+            }
             fs.writeFileSync(filePath, file.content, 'utf-8');
-            console.log(`  → ${file.filename}`);
         }
     }
 }

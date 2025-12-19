@@ -22,6 +22,13 @@ export interface GeneratorConfig {
      */
     baseUrl?: string;
     /**
+     * URL к предыдущей версии пакета для сравнения (опционально)
+     * Формат: https://registry.com/repo/npm/package/package-1.55.tgz
+     * Если указан, будет создан CompareReadme.md с изменениями
+     * @example 'https://customRegistry.niu.ru/repo/npm/api-codegen/api-codegen-1.55.tgz'
+     */
+    prevPackage?: string;
+    /**
      * Переменная окружения для токена авторизации
      * @example 'process.env.AUTH_TOKEN'
      */
@@ -57,6 +64,10 @@ export declare class ApiGenerator {
      * Запускает процесс генерации API клиента
      */
     generate(): Promise<void>;
+    /**
+     * Сравнивает текущую версию с предыдущей
+     */
+    private compareWithPrevious;
     /**
      * Загружает OpenAPI спецификацию из URL или файла
      */
