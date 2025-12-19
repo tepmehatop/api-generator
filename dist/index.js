@@ -126,10 +126,10 @@ class ApiGenerator {
             const result = comparator.compare(oldInfo, newInfo, serviceName);
             // Генерируем отчёт
             const report = comparator.generateComparisonReport(result);
-            // Сохраняем отчёт в корень
-            const reportPath = path.join(process.cwd(), `${serviceName}CompareReadme.md`);
+            // Сохраняем отчёт в outputDir (попадёт в NPM пакет)
+            const reportPath = path.join(this.config.outputDir, 'COMPARE_README.md');
             fs.writeFileSync(reportPath, report, 'utf-8');
-            console.log(`✅ Отчёт о сравнении сохранён: ${serviceName}CompareReadme.md`);
+            console.log(`✅ Отчёт о сравнении сохранён: ${this.config.outputDir}/COMPARE_README.md`);
             // Очищаем временные файлы
             comparator.cleanup();
         }
@@ -162,23 +162,11 @@ class ApiGenerator {
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
-        // Сохраняем каждый файл
+        // Сохраняем каждый файл в outputDir
         for (const file of files) {
-            // API_README.md сохраняем в outputDir (попадёт в NPM пакет)
-            // CompareReadme.md сохраняем в корень (для анализа изменений)
-            const isCompareReadme = file.filename.endsWith('CompareReadme.md');
-            let filePath;
-            if (isCompareReadme) {
-                // Сохраняем в корень проекта для анализа
-                filePath = path.join(process.cwd(), file.filename);
-                console.log(`  → ${file.filename} (в корень)`);
-            }
-            else {
-                // Все остальные файлы (включая API_README.md) в outputDir
-                filePath = path.join(outputDir, file.filename);
-                console.log(`  → ${file.filename}`);
-            }
+            const filePath = path.join(outputDir, file.filename);
             fs.writeFileSync(filePath, file.content, 'utf-8');
+            console.log(`  → ${file.filename}`);
         }
     }
 }

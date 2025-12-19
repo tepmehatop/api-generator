@@ -82,19 +82,80 @@ export class ApiComparator {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }
     
+    // Читаем .npmrc для получения токена авторизации
+    const npmrcPath = path.join(process.cwd(), '.npmrc');
+    let authToken: string | undefined;
+    
+    if (fs.existsSync(npmrcPath)) {
+      console.log('🔑 Найден .npmrc, использую авторизацию...');
+      const npmrcContent = fs.readFileSync(npmrcPath, 'utf-8');
+      
+      // Парсим .npmrc для поиска токена
+      // Формат: //registry.npmjs.org/:_authToken=YOUR_TOKEN
+      // Или: //customRegistry.niu.ru/repo/npm/:_authToken=YOUR_TOKEN
+      const authTokenMatch = npmrcContent.match(/:_authToken=([^\s\n]+)/);
+      
+      if (authTokenMatch) {
+        authToken = authTokenMatch[1];
+        console.log('✓ Токен авторизации найден');
+      } else {
+        // Пробуем найти _auth (base64)
+        const authMatch = npmrcContent.match(/:_auth=([^\s\n]+)/);
+        if (authMatch) {
+          authToken = authMatch[1];
+          console.log('✓ Base64 авторизация найдена');
+        }
+      }
+    } else {
+      console.log('⚠️ .npmrc не найден, пробую без авторизации...');
+    }
+    
+    // Настраиваем заголовки для axios
+    const headers: Record<string, string> = {};
+    
+    if (authToken) {
+      // Если токен начинается с "Bearer " - используем как есть
+      // Иначе добавляем Bearer
+      if (authToken.startsWith('Bearer ')) {
+        headers['Authorization'] = authToken;
+      } else if (authToken.includes(':')) {
+        // Это base64 формат (username:password)
+        headers['Authorization'] = `Basic ${authToken}`;
+      } else {
+        // Обычный токен
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+    }
+    
     // Скачиваем пакет
     const tgzPath = path.join(this.tempDir, 'package.tgz');
-    const response = await axios.get(packageUrl, { responseType: 'stream' });
-    const writer = fs.createWriteStream(tgzPath);
     
-    response.data.pipe(writer);
-    
-    await new Promise<void>((resolve, reject) => {
-      writer.on('finish', () => resolve());
-      writer.on('error', reject);
-    });
-    
-    console.log('✓ Пакет скачан');
+    try {
+      const response = await axios.get(packageUrl, { 
+        responseType: 'stream',
+        headers
+      });
+      
+      const writer = fs.createWriteStream(tgzPath);
+      response.data.pipe(writer);
+      
+      await new Promise<void>((resolve, reject) => {
+        writer.on('finish', () => resolve());
+        writer.on('error', reject);
+      });
+      
+      console.log('✓ Пакет скачан');
+    } catch (error: any) {
+      if (error.response?.status === 401) {
+        console.error('❌ Ошибка авторизации (401)');
+        console.error('   Проверьте:');
+        console.error('   1. Файл .npmrc существует в корне проекта');
+        console.error('   2. Токен в .npmrc актуален и корректен');
+        console.error('   3. У токена есть доступ к приватному registry');
+        throw new Error('Не удалось авторизоваться для скачивания пакета. Проверьте .npmrc');
+      }
+      throw error;
+    }
     
     // Распаковываем
     const extractPath = path.join(this.tempDir, 'extracted');
