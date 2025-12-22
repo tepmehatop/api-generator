@@ -15,7 +15,14 @@ export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-a
 export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator } from './happy-path-generator';
 
 // Экспорт коллектора данных для UI тестов
-export { collectApiData, createCollector, CollectorConfig, ApiRequestData } from './test-collector';
+export { 
+  setupApiCollector, 
+  sendCollectedData, 
+  createCollector, 
+  collectApiData,
+  CollectorConfig, 
+  ApiRequestData 
+} from './test-collector';
 
 export interface GeneratorConfig {
   /**

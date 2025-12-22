@@ -1,13 +1,17 @@
 /**
  * Модуль для сбора API request/response данных с фронта во время UI тестов
  *
- * Использование в beforeEach:
+ * Использование в beforeEach/afterEach:
  * ```typescript
- * import { collectApiData } from '@your-company/api-codegen/test-helpers';
+ * import { setupApiCollector, sendCollectedData } from '@your-company/api-codegen/test-helpers';
  *
  * test.beforeEach(async ({ page }, testInfo) => {
  *   await getReportData(page, testInfo); // Ваш существующий метод
- *   await collectApiData(page, testInfo); // Новый метод сбора данных
+ *   setupApiCollector(page, testInfo);   // Настройка коллектора
+ * });
+ *
+ * test.afterEach(async ({ page }, testInfo) => {
+ *   await sendCollectedData(page, testInfo); // Отправка данных
  * });
  * ```
  */
@@ -23,52 +27,31 @@ export interface ApiRequestData {
     testFile: string;
 }
 export interface CollectorConfig {
-    /**
-     * URL сервиса для отправки данных
-     * @default 'http://your-vm-host:3000'
-     */
     serviceUrl?: string;
-    /**
-     * Эндпоинт для отправки данных
-     * @default '/api/collect-data'
-     */
     endpoint?: string;
-    /**
-     * Фильтр URL - собирать данные только с этих URL
-     * @example ['/api/', '/v1/']
-     */
     urlFilters?: string[];
-    /**
-     * Исключить URL - не собирать данные с этих URL
-     * @example ['/health', '/metrics']
-     */
     excludeUrls?: string[];
-    /**
-     * Включить детальное логирование
-     */
     verbose?: boolean;
 }
 /**
  * Настраивает сбор API данных с фронта
- *
- * @param page Playwright Page объект
- * @param testInfo TestInfo из Playwright
- * @param config Конфигурация коллектора
+ * Вызывать в test.beforeEach()
+ */
+export declare function setupApiCollector(page: Page, testInfo: TestInfo, config?: CollectorConfig): void;
+/**
+ * Отправляет собранные данные на сервер
+ * Вызывать в test.afterEach()
+ */
+export declare function sendCollectedData(page: Page, testInfo: TestInfo): Promise<void>;
+/**
+ * Создаёт коллектор с конфигурацией
+ */
+export declare function createCollector(config: CollectorConfig): {
+    setup: (page: Page, testInfo: TestInfo) => void;
+    send: (page: Page, testInfo: TestInfo) => Promise<void>;
+};
+/**
+ * @deprecated Используйте setupApiCollector + sendCollectedData
  */
 export declare function collectApiData(page: Page, testInfo: TestInfo, config?: CollectorConfig): Promise<void>;
-/**
- * Создаёт коллектор с предустановленной конфигурацией
- *
- * @example
- * const collector = createCollector({
- *   serviceUrl: 'http://192.168.1.100:3000',
- *   urlFilters: ['/api/v1/'],
- *   verbose: true
- * });
- *
- * test.beforeEach(async ({ page }, testInfo) => {
- *   await collector(page, testInfo);
- * });
- */
-export declare function createCollector(config: CollectorConfig): (page: Page, testInfo: TestInfo) => Promise<void>;
 //# sourceMappingURL=test-collector.d.ts.map
