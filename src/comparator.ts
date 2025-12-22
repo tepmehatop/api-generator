@@ -82,79 +82,20 @@ export class ApiComparator {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }
     
-    // Читаем .npmrc для получения токена авторизации
-    const npmrcPath = path.join(process.cwd(), '.npmrc');
-    let authToken: string | undefined;
-    
-    if (fs.existsSync(npmrcPath)) {
-      console.log('🔑 Найден .npmrc, использую авторизацию...');
-      const npmrcContent = fs.readFileSync(npmrcPath, 'utf-8');
-      
-      // Парсим .npmrc для поиска токена
-      // Формат: //registry.npmjs.org/:_authToken=YOUR_TOKEN
-      // Или: //customRegistry.niu.ru/repo/npm/:_authToken=YOUR_TOKEN
-      const authTokenMatch = npmrcContent.match(/:_authToken=([^\s\n]+)/);
-      
-      if (authTokenMatch) {
-        authToken = authTokenMatch[1];
-        console.log('✓ Токен авторизации найден');
-      } else {
-        // Пробуем найти _auth (base64)
-        const authMatch = npmrcContent.match(/:_auth=([^\s\n]+)/);
-        if (authMatch) {
-          authToken = authMatch[1];
-          console.log('✓ Base64 авторизация найдена');
-        }
-      }
-    } else {
-      console.log('⚠️ .npmrc не найден, пробую без авторизации...');
-    }
-    
-    // Настраиваем заголовки для axios
-    const headers: Record<string, string> = {};
-    
-    if (authToken) {
-      // Если токен начинается с "Bearer " - используем как есть
-      // Иначе добавляем Bearer
-      if (authToken.startsWith('Bearer ')) {
-        headers['Authorization'] = authToken;
-      } else if (authToken.includes(':')) {
-        // Это base64 формат (username:password)
-        headers['Authorization'] = `Basic ${authToken}`;
-      } else {
-        // Обычный токен
-        headers['Authorization'] = `Bearer ${authToken}`;
-      }
-    }
-    
-    // Скачиваем пакет
     const tgzPath = path.join(this.tempDir, 'package.tgz');
     
-    try {
-      const response = await axios.get(packageUrl, { 
-        responseType: 'stream',
-        headers
-      });
-      
-      const writer = fs.createWriteStream(tgzPath);
-      response.data.pipe(writer);
-      
-      await new Promise<void>((resolve, reject) => {
-        writer.on('finish', () => resolve());
-        writer.on('error', reject);
-      });
-      
-      console.log('✓ Пакет скачан');
-    } catch (error: any) {
-      if (error.response?.status === 401) {
-        console.error('❌ Ошибка авторизации (401)');
-        console.error('   Проверьте:');
-        console.error('   1. Файл .npmrc существует в корне проекта');
-        console.error('   2. Токен в .npmrc актуален и корректен');
-        console.error('   3. У токена есть доступ к приватному registry');
-        throw new Error('Не удалось авторизоваться для скачивания пакета. Проверьте .npmrc');
+    // Проверяем это URL или локальный файл
+    if (packageUrl.startsWith('http://') || packageUrl.startsWith('https://')) {
+      // Скачиваем с URL
+      await this.downloadFromUrl(packageUrl, tgzPath);
+    } else {
+      // Копируем локальный файл
+      console.log('📁 Копирую локальный файл...');
+      if (!fs.existsSync(packageUrl)) {
+        throw new Error(`Файл не найден: ${packageUrl}`);
       }
-      throw error;
+      fs.copyFileSync(packageUrl, tgzPath);
+      console.log('✓ Файл скопирован');
     }
     
     // Распаковываем
@@ -173,6 +114,164 @@ export class ApiComparator {
     
     // Возвращаем путь к package/dist
     return path.join(extractPath, 'package', 'dist');
+  }
+  
+  /**
+   * Скачивает файл с URL с авторизацией
+   */
+  private async downloadFromUrl(packageUrl: string, destPath: string): Promise<void> {
+    // Читаем .npmrc для получения токена авторизации
+    const npmrcPath = path.join(process.cwd(), '.npmrc');
+    let authHeader: string | undefined;
+    
+    if (fs.existsSync(npmrcPath)) {
+      console.log('🔑 Найден .npmrc, использую авторизацию...');
+      const npmrcContent = fs.readFileSync(npmrcPath, 'utf-8');
+      
+      // Извлекаем registry из URL для точного поиска токена
+      const urlObj = new URL(packageUrl);
+      const registryHost = urlObj.hostname + urlObj.pathname.split('/').slice(0, -1).join('/');
+      
+      console.log(`   Registry: //${registryHost}`);
+      
+      // Ищем токен для конкретного registry
+      // Формат: //customRegistry.niu.ru/repo/npm/:_authToken=TOKEN
+      const specificTokenRegex = new RegExp(`//${registryHost.replace(/\//g, '\\/')}/:_authToken=([^\\s\\n]+)`);
+      const specificAuthRegex = new RegExp(`//${registryHost.replace(/\//g, '\\/')}/:_auth=([^\\s\\n]+)`);
+      
+      let authToken: string | undefined;
+      let isBase64Auth = false;
+      
+      // Проверяем специфичный для registry токен
+      let match = npmrcContent.match(specificTokenRegex);
+      if (match) {
+        authToken = match[1];
+        console.log('✓ Найден _authToken для registry');
+      } else {
+        // Проверяем _auth (base64)
+        match = npmrcContent.match(specificAuthRegex);
+        if (match) {
+          authToken = match[1];
+          isBase64Auth = true;
+          console.log('✓ Найден _auth (base64) для registry');
+        } else {
+          // Fallback: ищем любой токен
+          const anyTokenMatch = npmrcContent.match(/:_authToken=([^\s\n]+)/);
+          if (anyTokenMatch) {
+            authToken = anyTokenMatch[1];
+            console.log('✓ Найден общий _authToken');
+          } else {
+            const anyAuthMatch = npmrcContent.match(/:_auth=([^\s\n]+)/);
+            if (anyAuthMatch) {
+              authToken = anyAuthMatch[1];
+              isBase64Auth = true;
+              console.log('✓ Найден общий _auth (base64)');
+            }
+          }
+        }
+      }
+      
+      if (authToken) {
+        // Формируем правильный заголовок
+        if (isBase64Auth) {
+          // _auth уже base64, используем как Basic
+          authHeader = `Basic ${authToken}`;
+          console.log('   Использую: Basic auth (base64)');
+        } else if (authToken.startsWith('Bearer ')) {
+          // Уже с Bearer
+          authHeader = authToken;
+          console.log('   Использую: Bearer token');
+        } else if (authToken.startsWith('npm_')) {
+          // npm токен
+          authHeader = `Bearer ${authToken}`;
+          console.log('   Использую: Bearer token (npm)');
+        } else {
+          // Обычный токен
+          authHeader = `Bearer ${authToken}`;
+          console.log('   Использую: Bearer token');
+        }
+      } else {
+        console.log('⚠️ Токен не найден в .npmrc');
+      }
+    } else {
+      console.log('⚠️ .npmrc не найден');
+    }
+    
+    // Настраиваем headers
+    const headers: Record<string, string> = {
+      'Accept': 'application/octet-stream',
+      'User-Agent': 'npm/api-codegen'
+    };
+    
+    if (authHeader) {
+      headers['Authorization'] = authHeader;
+      console.log('   Authorization header установлен');
+    }
+    
+    // Скачиваем
+    try {
+      console.log('📥 Отправляю запрос...');
+      const response = await axios.get(packageUrl, { 
+        responseType: 'stream',
+        headers,
+        maxRedirects: 5,
+        validateStatus: (status) => status < 500 // Разрешаем редиректы
+      });
+      
+      if (response.status === 401) {
+        throw new Error('401 Unauthorized');
+      }
+      
+      if (response.status === 404) {
+        throw new Error('404 Not Found - пакет не существует');
+      }
+      
+      const writer = fs.createWriteStream(destPath);
+      response.data.pipe(writer);
+      
+      await new Promise<void>((resolve, reject) => {
+        writer.on('finish', () => resolve());
+        writer.on('error', reject);
+      });
+      
+      console.log('✓ Пакет скачан');
+    } catch (error: any) {
+      if (error.response?.status === 401 || error.message?.includes('401')) {
+        console.error('\n❌ Ошибка 401: Не удалось авторизоваться');
+        console.error('\n💡 Попробуйте альтернативный метод:');
+        console.error('   1. Вместо URL используйте локальный файл из Git:');
+        console.error('      "prevPackage": "./archive/api-codegen-1.55.0.tgz"');
+        console.error('');
+        console.error('   2. Или положите файл в репозиторий Bitbucket:');
+        console.error('      mkdir -p archive');
+        console.error('      cp api-codegen-1.55.0.tgz archive/');
+        console.error('      git add archive/ && git commit -m "Add version 1.55.0"');
+        console.error('');
+        console.error('   3. Проверьте .npmrc:');
+        if (fs.existsSync(path.join(process.cwd(), '.npmrc'))) {
+          console.error('      ✓ .npmrc найден');
+          const content = fs.readFileSync(path.join(process.cwd(), '.npmrc'), 'utf-8');
+          if (content.includes('_authToken') || content.includes('_auth')) {
+            console.error('      ✓ Токен найден в файле');
+          } else {
+            console.error('      ❌ Токен НЕ найден в файле');
+          }
+        } else {
+          console.error('      ❌ .npmrc не найден');
+        }
+        throw new Error('Не удалось скачать пакет из-за ошибки авторизации (401)');
+      }
+      
+      if (error.response?.status === 404) {
+        console.error('\n❌ Ошибка 404: Пакет не найден');
+        console.error(`   URL: ${packageUrl}`);
+        console.error('\n💡 Используйте локальный файл:');
+        console.error('   "prevPackage": "./archive/api-codegen-1.55.0.tgz"');
+        throw new Error('Пакет не найден (404)');
+      }
+      
+      throw error;
+    }
   }
   
   /**

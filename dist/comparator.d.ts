@@ -52,6 +52,10 @@ export declare class ApiComparator {
      */
     downloadAndExtractPackage(packageUrl: string): Promise<string>;
     /**
+     * Скачивает файл с URL с авторизацией
+     */
+    private downloadFromUrl;
+    /**
      * Извлекает информацию о методах из папки API
      */
     extractApiInfo(distPath: string, serviceName: string): ApiInfo;
