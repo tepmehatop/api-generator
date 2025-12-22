@@ -11,6 +11,12 @@ export { generateApiTests, ApiTestConfig } from './test-generator';
 // Экспорт анализатора базы данных
 export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';
 
+// Экспорт генератора Happy Path тестов
+export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator } from './happy-path-generator';
+
+// Экспорт коллектора данных для UI тестов
+export { collectApiData, createCollector, CollectorConfig, ApiRequestData } from './test-collector';
+
 export interface GeneratorConfig {
   /**
    * URL или путь к OpenAPI документу (JSON)

@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ApiGenerator = exports.analyzeAndGenerateTestData = exports.generateApiTests = void 0;
+exports.ApiGenerator = exports.createCollector = exports.collectApiData = exports.HappyPathTestGenerator = exports.generateHappyPathTests = exports.analyzeAndGenerateTestData = exports.generateApiTests = void 0;
 exports.generateApi = generateApi;
 const axios_1 = __importDefault(require("axios"));
 const fs = __importStar(require("fs"));
@@ -49,6 +49,14 @@ Object.defineProperty(exports, "generateApiTests", { enumerable: true, get: func
 // Экспорт анализатора базы данных
 var database_analyzer_1 = require("./database-analyzer");
 Object.defineProperty(exports, "analyzeAndGenerateTestData", { enumerable: true, get: function () { return database_analyzer_1.analyzeAndGenerateTestData; } });
+// Экспорт генератора Happy Path тестов
+var happy_path_generator_1 = require("./happy-path-generator");
+Object.defineProperty(exports, "generateHappyPathTests", { enumerable: true, get: function () { return happy_path_generator_1.generateHappyPathTests; } });
+Object.defineProperty(exports, "HappyPathTestGenerator", { enumerable: true, get: function () { return happy_path_generator_1.HappyPathTestGenerator; } });
+// Экспорт коллектора данных для UI тестов
+var test_collector_1 = require("./test-collector");
+Object.defineProperty(exports, "collectApiData", { enumerable: true, get: function () { return test_collector_1.collectApiData; } });
+Object.defineProperty(exports, "createCollector", { enumerable: true, get: function () { return test_collector_1.createCollector; } });
 /**
  * Основной класс для генерации API клиента из OpenAPI спецификации
  */
