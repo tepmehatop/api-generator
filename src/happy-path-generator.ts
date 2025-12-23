@@ -9,26 +9,26 @@
  * - Стандартная структура как в позитивных/негативных тестах
  */
 
-import postgres from 'postgres';
 import * as fs from 'fs';
 import * as path from 'path';
 
 export interface HappyPathTestConfig {
   /**
-   * Подключение к БД
-   */
-  database: {
-    host: string;
-    port: number;
-    database: string;
-    username: string;
-    password: string;
-  };
-  
-  /**
    * Путь для сохранения тестов
    */
   outputDir: string;
+  
+  /**
+   * Имя метода для подключения к БД (template literal)
+   * Например: 'testDbConnect' - будет использоваться как await testDbConnect`SELECT ...`
+   */
+  dbConnectionMethod: string;
+  
+  /**
+   * Схема БД для поиска таблиц
+   * @default 'qa' - схема где лежит api_requests
+   */
+  dbSchema?: string;
   
   /**
    * Force режим - перегенерировать все тесты
@@ -84,12 +84,13 @@ interface UniqueRequest {
 }
 
 export class HappyPathTestGenerator {
-  private sql: ReturnType<typeof postgres>;
+  private dbMethod: any;
   private config: Required<HappyPathTestConfig>;
   
-  constructor(config: HappyPathTestConfig) {
+  constructor(config: HappyPathTestConfig, dbConnectionMethod: any) {
     this.config = {
       ...config,
+      dbSchema: config.dbSchema || 'qa',
       force: config.force || false,
       endpointFilter: config.endpointFilter || [],
       methodFilter: config.methodFilter || [],
@@ -99,7 +100,7 @@ export class HappyPathTestGenerator {
       axiosHelpersPath: config.axiosHelpersPath || '../../../helpers/axiosHelpers'
     };
     
-    this.sql = postgres(config.database);
+    this.dbMethod = dbConnectionMethod;
   }
   
   /**
@@ -127,8 +128,6 @@ export class HappyPathTestGenerator {
     console.log(`\n✨ Генерация завершена!`);
     console.log(`   Всего тестов: ${totalTests}`);
     console.log(`   Новых тестов: ${newTests}`);
-    
-    await this.sql.end();
   }
   
   private async fetchUniqueRequests(): Promise<UniqueRequest[]> {
@@ -158,12 +157,12 @@ export class HappyPathTestGenerator {
       SELECT DISTINCT ON (endpoint, method, request_body::text)
         id, endpoint, method, request_body, response_body,
         response_status, test_name, test_generated, test_file_path
-      FROM qa.api_requests
+      FROM ${this.config.dbSchema}.api_requests
       ${where}
       ORDER BY endpoint, method, request_body::text, created_at DESC
     `;
     
-    const requests = await this.sql.unsafe(query);
+    const requests = await this.dbMethod([query]);
     return requests as unknown as UniqueRequest[];
   }
   
@@ -402,19 +401,19 @@ export class HappyPathTestGenerator {
   
   private async markAsGenerated(ids: number[], filePath: string): Promise<void> {
     for (const id of ids) {
-      await this.sql`
-        UPDATE qa.api_requests
+      await this.dbMethod([`
+        UPDATE ${this.config.dbSchema}.api_requests
         SET 
           test_generated = TRUE,
-          test_file_path = ${filePath},
+          test_file_path = '${filePath}',
           generated_at = NOW()
         WHERE id = ${id}
-      `;
+      `]);
     }
   }
 }
 
-export async function generateHappyPathTests(config: HappyPathTestConfig): Promise<void> {
-  const generator = new HappyPathTestGenerator(config);
+export async function generateHappyPathTests(config: HappyPathTestConfig, dbConnectionMethod: any): Promise<void> {
+  const generator = new HappyPathTestGenerator(config, dbConnectionMethod);
   await generator.generate();
 }

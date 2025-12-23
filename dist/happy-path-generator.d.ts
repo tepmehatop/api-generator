@@ -10,19 +10,19 @@
  */
 export interface HappyPathTestConfig {
     /**
-     * Подключение к БД
-     */
-    database: {
-        host: string;
-        port: number;
-        database: string;
-        username: string;
-        password: string;
-    };
-    /**
      * Путь для сохранения тестов
      */
     outputDir: string;
+    /**
+     * Имя метода для подключения к БД (template literal)
+     * Например: 'testDbConnect' - будет использоваться как await testDbConnect`SELECT ...`
+     */
+    dbConnectionMethod: string;
+    /**
+     * Схема БД для поиска таблиц
+     * @default 'qa' - схема где лежит api_requests
+     */
+    dbSchema?: string;
     /**
      * Force режим - перегенерировать все тесты
      * @default false
@@ -58,9 +58,9 @@ export interface HappyPathTestConfig {
     axiosHelpersPath?: string;
 }
 export declare class HappyPathTestGenerator {
-    private sql;
+    private dbMethod;
     private config;
-    constructor(config: HappyPathTestConfig);
+    constructor(config: HappyPathTestConfig, dbConnectionMethod: any);
     /**
      * Генерирует все Happy Path тесты
      */
@@ -78,5 +78,5 @@ export declare class HappyPathTestGenerator {
     private endpointToFileName;
     private markAsGenerated;
 }
-export declare function generateHappyPathTests(config: HappyPathTestConfig): Promise<void>;
+export declare function generateHappyPathTests(config: HappyPathTestConfig, dbConnectionMethod: any): Promise<void>;
 //# sourceMappingURL=happy-path-generator.d.ts.map

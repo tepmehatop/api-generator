@@ -42,19 +42,16 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HappyPathTestGenerator = void 0;
 exports.generateHappyPathTests = generateHappyPathTests;
-const postgres_1 = __importDefault(require("postgres"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 class HappyPathTestGenerator {
-    constructor(config) {
+    constructor(config, dbConnectionMethod) {
         this.config = {
             ...config,
+            dbSchema: config.dbSchema || 'qa',
             force: config.force || false,
             endpointFilter: config.endpointFilter || [],
             methodFilter: config.methodFilter || [],
@@ -63,7 +60,7 @@ class HappyPathTestGenerator {
             testTag: config.testTag || '@apiHappyPath',
             axiosHelpersPath: config.axiosHelpersPath || '../../../helpers/axiosHelpers'
         };
-        this.sql = (0, postgres_1.default)(config.database);
+        this.dbMethod = dbConnectionMethod;
     }
     /**
      * Генерирует все Happy Path тесты
@@ -85,7 +82,6 @@ class HappyPathTestGenerator {
         console.log(`\n✨ Генерация завершена!`);
         console.log(`   Всего тестов: ${totalTests}`);
         console.log(`   Новых тестов: ${newTests}`);
-        await this.sql.end();
     }
     async fetchUniqueRequests() {
         const conditions = [];
@@ -108,11 +104,11 @@ class HappyPathTestGenerator {
       SELECT DISTINCT ON (endpoint, method, request_body::text)
         id, endpoint, method, request_body, response_body,
         response_status, test_name, test_generated, test_file_path
-      FROM qa.api_requests
+      FROM ${this.config.dbSchema}.api_requests
       ${where}
       ORDER BY endpoint, method, request_body::text, created_at DESC
     `;
-        const requests = await this.sql.unsafe(query);
+        const requests = await this.dbMethod([query]);
         return requests;
     }
     groupByEndpoint(requests) {
@@ -286,20 +282,20 @@ class HappyPathTestGenerator {
     }
     async markAsGenerated(ids, filePath) {
         for (const id of ids) {
-            await this.sql `
-        UPDATE qa.api_requests
+            await this.dbMethod([`
+        UPDATE ${this.config.dbSchema}.api_requests
         SET 
           test_generated = TRUE,
-          test_file_path = ${filePath},
+          test_file_path = '${filePath}',
           generated_at = NOW()
         WHERE id = ${id}
-      `;
+      `]);
         }
     }
 }
 exports.HappyPathTestGenerator = HappyPathTestGenerator;
-async function generateHappyPathTests(config) {
-    const generator = new HappyPathTestGenerator(config);
+async function generateHappyPathTests(config, dbConnectionMethod) {
+    const generator = new HappyPathTestGenerator(config, dbConnectionMethod);
     await generator.generate();
 }
 //# sourceMappingURL=happy-path-generator.js.map
