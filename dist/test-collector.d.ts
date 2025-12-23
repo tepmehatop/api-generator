@@ -32,15 +32,29 @@ export interface ApiRequestData {
 }
 export interface CollectorConfig {
     /**
-     * URL сервиса для отправки данных
+     * URL сервиса для отправки данных (если не используется Kafka)
      * @default 'http://localhost:3000'
      */
     serviceUrl?: string;
     /**
-     * Эндпоинт для отправки данных
+     * Эндпоинт для отправки данных (если не используется Kafka)
      * @default '/api/collect-data'
      */
     endpoint?: string;
+    /**
+     * Использовать Kafka вместо HTTP
+     * @default false
+     */
+    useKafka?: boolean;
+    /**
+     * Kafka topic для отправки данных
+     * @default 'api-collector-topic'
+     */
+    kafkaTopic?: string;
+    /**
+     * Функция для отправки в Kafka (должна быть предоставлена из автотестов)
+     */
+    kafkaSendFunction?: (topic: string, message: any) => Promise<void>;
     /**
      * Фильтр URL - собирать данные только с этих URL
      * @example ['/api/', '/v1/']
@@ -53,16 +67,19 @@ export interface CollectorConfig {
     excludeUrls?: string[];
     /**
      * Размер batch для отправки (количество запросов)
-     * При достижении этого количества данные отправляются автоматически
-     * @default 20
+     * @default 10
      */
     batchSize?: number;
     /**
      * Интервал отправки в миллисекундах
-     * Данные отправляются каждые N мс даже если batch не заполнен
-     * @default 5000 (5 секунд)
+     * @default 3000
      */
     sendInterval?: number;
+    /**
+     * Максимальный размер batch в байтах
+     * @default 5242880 (5MB)
+     */
+    maxBatchBytes?: number;
     /**
      * Включить детальное логирование
      */

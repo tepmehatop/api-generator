@@ -28,64 +28,125 @@ exports.collectApiData = collectApiData;
 const DEFAULT_CONFIG = {
     serviceUrl: process.env.API_COLLECTOR_URL || 'http://localhost:3000',
     endpoint: '/api/collect-data',
+    useKafka: false,
+    kafkaTopic: process.env.KAFKA_TOPIC || 'api-collector-topic',
     urlFilters: ['/api/'],
     excludeUrls: ['/health', '/metrics', '/ping'],
-    batchSize: 20,
-    sendInterval: 5000,
+    batchSize: 10,
+    sendInterval: 3000,
+    maxBatchBytes: 5242880,
     verbose: false
 };
 const testStates = new Map();
 /**
- * Отправляет batch данных на сервер
+ * Обрезает большие объекты до заданного размера
+ */
+/**
+ * Вычисляет размер данных в байтах
+ */
+function getDataSize(data) {
+    try {
+        return JSON.stringify(data).length;
+    }
+    catch {
+        return 0;
+    }
+}
+/**
+ * Отправляет batch данных на сервер или в Kafka
  */
 async function sendBatch(testId, force = false) {
     const state = testStates.get(testId);
     if (!state || state.isSending)
         return;
-    // Если batch пустой или слишком мал (и не force), пропускаем
     if (state.data.length === 0 || (!force && state.data.length < 3)) {
         return;
     }
     state.isSending = true;
     const batch = [...state.data];
-    state.data = []; // Очищаем buffer
+    state.data = [];
+    state.currentBatchSize = 0;
+    const batchSizeKB = (getDataSize(batch) / 1024).toFixed(2);
     try {
-        const serviceEndpoint = `${state.config.serviceUrl}${state.config.endpoint}`;
-        if (state.config.verbose) {
-            console.log(`[API Collector] 📤 Отправляю batch: ${batch.length} записей (всего: ${state.totalSent + batch.length})`);
-        }
-        const response = await fetch(serviceEndpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                testName: state.testInfo.title,
-                testFile: state.testInfo.file,
-                data: batch
-            })
-        });
-        if (!response.ok) {
-            const text = await response.text();
-            console.error(`[API Collector] ❌ Ошибка ${response.status}: ${text}`);
-            // Возвращаем данные обратно если ошибка
-            state.data = [...batch, ...state.data];
+        if (state.config.useKafka) {
+            // Отправка в Kafka
+            await sendToKafka(state, batch, batchSizeKB);
         }
         else {
-            state.totalSent += batch.length;
-            if (state.config.verbose) {
-                const result = await response.json();
-                console.log(`[API Collector] ✅ Отправлено: ${result.savedCount} записей`);
-            }
+            // Отправка через HTTP
+            await sendToHttp(state, batch, batchSizeKB);
         }
     }
     catch (error) {
         console.error('[API Collector] ❌ Ошибка отправки:', error);
-        // Возвращаем данные обратно
         state.data = [...batch, ...state.data];
+        state.currentBatchSize = getDataSize(state.data);
     }
     finally {
         state.isSending = false;
+    }
+}
+/**
+ * Отправка в Kafka
+ */
+async function sendToKafka(state, batch, batchSizeKB) {
+    if (!state.config.kafkaSendFunction) {
+        throw new Error('Kafka send function не предоставлена в конфигурации');
+    }
+    if (state.config.verbose) {
+        console.log(`[API Collector] 📤 Kafka: отправляю ${batch.length} записей, ~${batchSizeKB}KB в топик ${state.config.kafkaTopic}`);
+    }
+    // Отправляем каждую запись отдельным сообщением в Kafka
+    let sentCount = 0;
+    for (const item of batch) {
+        try {
+            await state.config.kafkaSendFunction(state.config.kafkaTopic, {
+                testName: state.testInfo.title,
+                testFile: state.testInfo.file,
+                data: item
+            });
+            sentCount++;
+        }
+        catch (error) {
+            console.error(`[API Collector] ❌ Kafka ошибка для ${item.method} ${item.endpoint}:`, error);
+        }
+    }
+    state.totalSent += sentCount;
+    if (state.config.verbose) {
+        console.log(`[API Collector] ✅ Kafka: отправлено ${sentCount} из ${batch.length} записей`);
+    }
+}
+/**
+ * Отправка через HTTP
+ */
+async function sendToHttp(state, batch, batchSizeKB) {
+    const serviceEndpoint = `${state.config.serviceUrl}${state.config.endpoint}`;
+    if (state.config.verbose) {
+        console.log(`[API Collector] 📤 HTTP: отправляю ${batch.length} записей, ~${batchSizeKB}KB на ${serviceEndpoint}`);
+    }
+    const response = await fetch(serviceEndpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            testName: state.testInfo.title,
+            testFile: state.testInfo.file,
+            data: batch
+        })
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        console.error(`[API Collector] ❌ HTTP ошибка ${response.status}: ${text}`);
+        console.error(`[API Collector] 💡 Размер batch: ${batchSizeKB}KB, количество: ${batch.length}`);
+        throw new Error(`HTTP ${response.status}: ${text}`);
+    }
+    else {
+        state.totalSent += batch.length;
+        if (state.config.verbose) {
+            const result = await response.json();
+            console.log(`[API Collector] ✅ HTTP: отправлено ${result.savedCount} записей`);
+        }
     }
 }
 /**
@@ -95,9 +156,21 @@ function checkAndSendBatch(testId) {
     const state = testStates.get(testId);
     if (!state)
         return;
-    // Если достигли размера batch, отправляем немедленно
+    // Если достигли размера batch по количеству, отправляем
     if (state.data.length >= state.config.batchSize) {
+        if (state.config.verbose) {
+            console.log(`[API Collector] 📊 Batch размер достигнут: ${state.data.length} запросов`);
+        }
         sendBatch(testId, false);
+        return;
+    }
+    // Если достигли размера batch в байтах, отправляем
+    if (state.currentBatchSize >= state.config.maxBatchBytes) {
+        if (state.config.verbose) {
+            console.log(`[API Collector] 📊 Batch размер в байтах достигнут: ${(state.currentBatchSize / 1024).toFixed(2)}KB`);
+        }
+        sendBatch(testId, false);
+        return;
     }
 }
 /**
@@ -151,7 +224,7 @@ async function sendRemainingData(testId) {
  * @param config Конфигурация коллектора
  */
 function setupApiCollector(page, testInfo, config = {}) {
-    const cfg = { ...DEFAULT_CONFIG, ...config };
+    const cfg = { ...DEFAULT_CONFIG, ...config, kafkaSendFunction: config.kafkaSendFunction };
     const testId = `${testInfo.file}:${testInfo.title}:${Date.now()}`;
     // Инициализируем состояние
     const state = {
@@ -160,12 +233,17 @@ function setupApiCollector(page, testInfo, config = {}) {
         testInfo,
         sendTimer: null,
         isSending: false,
-        totalSent: 0
+        totalSent: 0,
+        currentBatchSize: 0
     };
     testStates.set(testId, state);
     if (cfg.verbose) {
         console.log(`[API Collector] 🔍 Начинаю сбор для: ${testInfo.title}`);
+        console.log(`[API Collector] ⚙️  Режим: ${cfg.useKafka ? 'Kafka' : 'HTTP'}`);
         console.log(`[API Collector] ⚙️  Batch: ${cfg.batchSize} запросов, интервал: ${cfg.sendInterval}ms`);
+        if (cfg.useKafka) {
+            console.log(`[API Collector] ⚙️  Kafka топик: ${cfg.kafkaTopic}`);
+        }
     }
     // Создаём обработчик response
     const responseHandler = async (response) => {
@@ -187,7 +265,7 @@ function setupApiCollector(page, testInfo, config = {}) {
             // Извлекаем endpoint из URL
             const urlObj = new URL(url);
             const endpoint = urlObj.pathname;
-            // Получаем request body
+            // Получаем request body (БЕЗ обрезки - полные данные!)
             let requestBody = null;
             try {
                 const postData = request.postData();
@@ -203,7 +281,7 @@ function setupApiCollector(page, testInfo, config = {}) {
             catch (e) {
                 // Ignore
             }
-            // Получаем response body
+            // Получаем response body (БЕЗ обрезки - полные данные!)
             let responseBody = null;
             const responseStatus = response.status();
             try {
@@ -215,7 +293,7 @@ function setupApiCollector(page, testInfo, config = {}) {
             catch (e) {
                 // Ignore
             }
-            // Собираем данные
+            // Собираем данные (ПОЛНЫЕ, без обрезки)
             const data = {
                 endpoint,
                 method,
@@ -230,8 +308,11 @@ function setupApiCollector(page, testInfo, config = {}) {
             const currentState = testStates.get(testId);
             if (currentState) {
                 currentState.data.push(data);
+                // Обновляем размер batch
+                currentState.currentBatchSize = getDataSize(currentState.data);
                 if (cfg.verbose) {
-                    console.log(`[API Collector] ✓ ${method} ${endpoint} -> ${responseStatus} (buffer: ${currentState.data.length})`);
+                    const sizeKB = (currentState.currentBatchSize / 1024).toFixed(2);
+                    console.log(`[API Collector] ✓ ${method} ${endpoint} -> ${responseStatus} (buffer: ${currentState.data.length}, ~${sizeKB}KB)`);
                 }
                 // Проверяем нужно ли отправить batch
                 checkAndSendBatch(testId);
