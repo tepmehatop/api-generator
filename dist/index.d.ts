@@ -2,6 +2,9 @@ export { generateApiTests, ApiTestConfig } from './test-generator';
 export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';
 export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator } from './happy-path-generator';
 export { setupApiCollector, sendCollectedData, createCollector, collectApiData, CollectorConfig, ApiRequestData } from './test-collector';
+export { normalizeDbData, convertDataTypes, deepCompareObjects, compareDbWithResponse } from './utils/data-comparison';
+export { generateTypeValidationCode, FieldSchema } from './utils/type-validator';
+export { findDtoForEndpoint, generateDtoValidationCode, DTOInfo, DTOField } from './utils/dto-finder';
 export interface GeneratorConfig {
     /**
      * URL или путь к OpenAPI документу (JSON)

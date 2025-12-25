@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ApiGenerator = exports.collectApiData = exports.createCollector = exports.sendCollectedData = exports.setupApiCollector = exports.HappyPathTestGenerator = exports.generateHappyPathTests = exports.analyzeAndGenerateTestData = exports.generateApiTests = void 0;
+exports.ApiGenerator = exports.generateDtoValidationCode = exports.findDtoForEndpoint = exports.generateTypeValidationCode = exports.compareDbWithResponse = exports.deepCompareObjects = exports.convertDataTypes = exports.normalizeDbData = exports.collectApiData = exports.createCollector = exports.sendCollectedData = exports.setupApiCollector = exports.HappyPathTestGenerator = exports.generateHappyPathTests = exports.analyzeAndGenerateTestData = exports.generateApiTests = void 0;
 exports.generateApi = generateApi;
 const axios_1 = __importDefault(require("axios"));
 const fs = __importStar(require("fs"));
@@ -59,6 +59,17 @@ Object.defineProperty(exports, "setupApiCollector", { enumerable: true, get: fun
 Object.defineProperty(exports, "sendCollectedData", { enumerable: true, get: function () { return test_collector_1.sendCollectedData; } });
 Object.defineProperty(exports, "createCollector", { enumerable: true, get: function () { return test_collector_1.createCollector; } });
 Object.defineProperty(exports, "collectApiData", { enumerable: true, get: function () { return test_collector_1.collectApiData; } });
+// Экспорт утилит для Happy Path (пункты 5, 6, 9, 10)
+var data_comparison_1 = require("./utils/data-comparison");
+Object.defineProperty(exports, "normalizeDbData", { enumerable: true, get: function () { return data_comparison_1.normalizeDbData; } });
+Object.defineProperty(exports, "convertDataTypes", { enumerable: true, get: function () { return data_comparison_1.convertDataTypes; } });
+Object.defineProperty(exports, "deepCompareObjects", { enumerable: true, get: function () { return data_comparison_1.deepCompareObjects; } });
+Object.defineProperty(exports, "compareDbWithResponse", { enumerable: true, get: function () { return data_comparison_1.compareDbWithResponse; } });
+var type_validator_1 = require("./utils/type-validator");
+Object.defineProperty(exports, "generateTypeValidationCode", { enumerable: true, get: function () { return type_validator_1.generateTypeValidationCode; } });
+var dto_finder_1 = require("./utils/dto-finder");
+Object.defineProperty(exports, "findDtoForEndpoint", { enumerable: true, get: function () { return dto_finder_1.findDtoForEndpoint; } });
+Object.defineProperty(exports, "generateDtoValidationCode", { enumerable: true, get: function () { return dto_finder_1.generateDtoValidationCode; } });
 /**
  * Основной класс для генерации API клиента из OpenAPI спецификации
  */

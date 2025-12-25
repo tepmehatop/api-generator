@@ -24,6 +24,26 @@ export {
   ApiRequestData 
 } from './test-collector';
 
+// Экспорт утилит для Happy Path (пункты 5, 6, 9, 10)
+export { 
+  normalizeDbData, 
+  convertDataTypes, 
+  deepCompareObjects, 
+  compareDbWithResponse 
+} from './utils/data-comparison';
+
+export { 
+  generateTypeValidationCode, 
+  FieldSchema 
+} from './utils/type-validator';
+
+export { 
+  findDtoForEndpoint, 
+  generateDtoValidationCode, 
+  DTOInfo, 
+  DTOField 
+} from './utils/dto-finder';
+
 export interface GeneratorConfig {
   /**
    * URL или путь к OpenAPI документу (JSON)
