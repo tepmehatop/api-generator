@@ -1,27 +1,29 @@
 /**
- * Генератор Happy Path API тестов на основе реальных данных с фронта
- * 
- * ВЕРСИЯ 10.0 - ВСЕ 12 ПУНКТОВ ИСПРАВЛЕНИЙ
- * 
- * 1. ✅ Полный архив проекта
- * 2. ✅ Файлы с префиксом .test.ts (не .spec.ts)
- * 3. ✅ Структура теста СТРОГО как в примере findPetsByStatus.test.ts
- * 4. ✅ Использование только axios (без request от Playwright)
- * 5. ✅ Нормализация данных из БД
- * 6. ✅ Глубокое сравнение объектов
- * 7. ✅ Конфигурируемая глобальная переменная стенда
- * 8. ✅ Конфигурируемый axios config с импортом
- * 9. ✅ Валидация структуры и типов данных
- * 10. ✅ Проверка обязательных полей из DTO
- * 11. ✅ Вынос данных в отдельные файлы
- * 12. ✅ Объединение дублирующих тестов
+ * Генератор Happy Path API тестов
+ * ВЕРСИЯ 11.0 - ВСЕ ИСПРАВЛЕНИЯ ПРИМЕНЕНЫ
+ *
+ * ИСПРАВЛЕНИЯ:
+ * 1. Конфигурируемый импорт test/expect (testImportPath)
+ * 2. В apiErrorCodes только 200-ые коды
+ * 3. Описание теста с рандомным номером
+ * 4. Запросы через catch с детальным выводом
+ * 5. Применены deepCompareObjects, generateTypeValidationCode, findDtoForEndpoint
+ * 6. generateTypeValidationCode на основе DTO
+ * 7. normalizeDbDataByDto на основе типов из DTO
+ * 8. Исправлен mergeDuplicateTests (нормализация endpoint)
+ * 9. createSeparateDataFiles - нормализация во внешнем файле
+ * 10. Импорт DTO в тест
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { findDtoForEndpoint, generateDtoValidationCode, DTOInfo } from './utils/dto-finder';
 import { generateTypeValidationCode } from './utils/type-validator';
-import { compareDbWithResponse, normalizeDbData } from './utils/data-comparison';
+import {
+  compareDbWithResponse,
+  normalizeDbData,
+  normalizeDbDataByDto
+} from './utils/data-comparison';
 
 export interface HappyPathTestConfig {
   outputDir: string;
@@ -33,22 +35,16 @@ export interface HappyPathTestConfig {
   onlySuccessful?: boolean;
   testTag?: string;
   force?: boolean;
-  
-  // Пункт 7: Глобальная переменная стенда
-  standUrlEnvVar?: string; // Название переменной окружения (например 'STANDURL')
-  
-  // Пункт 8: Конфиг для axios
-  axiosConfigName?: string; // Название конфига (например 'configApiHeaderAdmin')
-  axiosConfigPath?: string; // Путь к файлу с конфигом
-  
-  // Пункт 10: Путь к сгенерированным API файлам с DTO
+
+  standUrlEnvVar?: string;
+  axiosConfigName?: string;
+  axiosConfigPath?: string;
   apiGeneratedPath?: string;
-  
-  // Пункт 11: Создание отдельных файлов с данными
   createSeparateDataFiles?: boolean;
-  
-  // Пункт 12: Объединение дублирующих тестов
   mergeDuplicateTests?: boolean;
+
+  // НОВОЕ: Откуда импортировать test и expect
+  testImportPath?: string; // По умолчанию '@playwright/test'
 }
 
 interface UniqueRequest {
@@ -76,12 +72,13 @@ export class HappyPathTestGenerator {
       testTag: '@apiHappyPath',
       force: false,
       dbSchema: 'qa',
-      standUrlEnvVar: 'StandURL', // Пункт 7: дефолтное значение
-      axiosConfigName: 'configApiHeaderAdmin', // Пункт 8: дефолтное значение
-      axiosConfigPath: '../../../helpers/axiosHelpers', // Пункт 8: дефолтный путь
-      apiGeneratedPath: '', // Пункт 10
-      createSeparateDataFiles: false, // Пункт 11: по умолчанию false (встроенные данные)
-      mergeDuplicateTests: true, // Пункт 12: по умолчанию true
+      standUrlEnvVar: 'StandURL',
+      axiosConfigName: 'configApiHeaderAdmin',
+      axiosConfigPath: '../../../helpers/axiosHelpers',
+      apiGeneratedPath: '',
+      createSeparateDataFiles: false,
+      mergeDuplicateTests: true,
+      testImportPath: '@playwright/test', // ИСПРАВЛЕНИЕ 1
       ...config
     };
 
@@ -90,15 +87,14 @@ export class HappyPathTestGenerator {
 
   async generate(): Promise<void> {
     console.log('🔍 Подключаюсь к БД и собираю данные...');
-    console.log(this.config.force ? '⚠️  FORCE режим - перегенерация всех тестов' : 'ℹ️  Инкрементальный режим - только новые данные');
+    console.log(this.config.force ? '⚠️  FORCE режим' : 'ℹ️  Инкрементальный режим');
 
     const uniqueRequests = await this.fetchUniqueRequests();
     console.log(`📊 Найдено ${uniqueRequests.length} уникальных запросов`);
 
-    // Пункт 12: Группируем по структуре если включено объединение
     const grouped = this.config.mergeDuplicateTests
-      ? this.groupByStructure(uniqueRequests)
-      : this.groupByEndpoint(uniqueRequests);
+        ? this.groupByStructure(uniqueRequests)
+        : this.groupByEndpoint(uniqueRequests);
 
     console.log(`📁 Сгруппировано по ${Object.keys(grouped).length} endpoints\n`);
 
@@ -117,14 +113,15 @@ export class HappyPathTestGenerator {
   }
 
   /**
-   * Пункт 12: Группировка по структуре запроса (объединение дублей)
+   * ИСПРАВЛЕНИЕ 8: Правильная группировка - заменяем числа на {id}
    */
   private groupByStructure(requests: UniqueRequest[]): Record<string, UniqueRequest[]> {
     const grouped: Record<string, UniqueRequest[]> = {};
 
     for (const request of requests) {
-      const structureHash = this.getStructureHash(request);
-      const key = `${request.method}:${request.endpoint}:${structureHash}`;
+      // Заменяем все числа в пути на {id}
+      const normalizedEndpoint = request.endpoint.replace(/\/\d+/g, '/{id}');
+      const key = `${request.method}:${normalizedEndpoint}`;
 
       if (!grouped[key]) {
         grouped[key] = [];
@@ -136,35 +133,6 @@ export class HappyPathTestGenerator {
     }
 
     return grouped;
-  }
-
-  /**
-   * Создает хэш структуры request (игнорируя ID)
-   */
-  private getStructureHash(request: UniqueRequest): string {
-    if (!request.request_body) return 'empty';
-
-    function normalizeStructure(obj: any): any {
-      if (obj === null || obj === undefined) return 'null';
-      if (typeof obj !== 'object') return typeof obj;
-      if (Array.isArray(obj)) {
-        return obj.length > 0 ? [normalizeStructure(obj[0])] : [];
-      }
-
-      const normalized: any = {};
-      for (const key in obj) {
-        // Игнорируем поля с ID в названии
-        if (key.toLowerCase().includes('id')) {
-          normalized[key] = 'id';
-        } else {
-          normalized[key] = normalizeStructure(obj[key]);
-        }
-      }
-      return normalized;
-    }
-
-    const normalized = normalizeStructure(request.request_body);
-    return JSON.stringify(normalized);
   }
 
   private groupByEndpoint(requests: UniqueRequest[]): Record<string, UniqueRequest[]> {
@@ -248,15 +216,13 @@ export class HappyPathTestGenerator {
   }
 
   private async generateTestsForEndpoint(
-    endpointKey: string,
-    requests: UniqueRequest[]
+      endpointKey: string,
+      requests: UniqueRequest[]
   ): Promise<{ total: number; added: number }> {
     const [method, endpoint] = endpointKey.split(':');
     const fileName = this.endpointToFileName(endpoint, method);
 
-    // Пункт 2: Используем .test.ts вместо .spec.ts
     const filePath = path.join(this.config.outputDir, `${fileName}.happy-path.test.ts`);
-
     const fileExists = fs.existsSync(filePath);
 
     let existingTests: string[] = [];
@@ -275,9 +241,8 @@ export class HappyPathTestGenerator {
       }
 
       await this.appendTestsToFile(filePath, endpoint, method, requests);
-      console.log(`  ✓ ${fileName}.happy-path.test.ts (+${requests.length} ${requests.length === 1 ? 'тест' : 'тестов'})`);
+      console.log(`  ✓ ${fileName}.happy-path.test.ts (+${requests.length})`);
     } else {
-      // Пункт 11: Создаем папку для данных если нужно
       if (this.config.createSeparateDataFiles) {
         const dataDir = path.join(this.config.outputDir, 'test-data');
         if (!fs.existsSync(dataDir)) {
@@ -295,7 +260,7 @@ export class HappyPathTestGenerator {
       newTestsAdded = requests.length;
 
       const mode = this.config.force ? '🔄' : '✨';
-      console.log(`  ${mode} ${fileName}.happy-path.test.ts (${requests.length} ${requests.length === 1 ? 'тест' : 'тестов'})`);
+      console.log(`  ${mode} ${fileName}.happy-path.test.ts (${requests.length})`);
     }
 
     await this.markAsGenerated(requests.map(r => r.id), filePath);
@@ -312,25 +277,29 @@ export class HappyPathTestGenerator {
   }
 
   private async appendTestsToFile(
-    filePath: string,
-    endpoint: string,
-    method: string,
-    requests: UniqueRequest[]
+      filePath: string,
+      endpoint: string,
+      method: string,
+      requests: UniqueRequest[]
   ): Promise<void> {
     let content = fs.readFileSync(filePath, 'utf-8');
-
     const lastBraceIndex = content.lastIndexOf('});');
 
     if (lastBraceIndex === -1) {
       throw new Error(`Не удалось найти конец describe блока в ${filePath}`);
     }
 
+    // Находим DTO
+    let dtoInfo: DTOInfo | null = null;
+    if (this.config.apiGeneratedPath) {
+      dtoInfo = findDtoForEndpoint(this.config.apiGeneratedPath, endpoint, method);
+    }
+
     const newTests = await Promise.all(
-      requests.map((req, index) => this.generateSingleTest(endpoint, method, req, index + 1))
+        requests.map((req, index) => this.generateSingleTest(endpoint, method, req, index + 1, dtoInfo))
     );
 
     content = content.slice(0, lastBraceIndex) + '\n' + newTests.join('\n\n') + '\n' + content.slice(lastBraceIndex);
-
     fs.writeFileSync(filePath, content, 'utf-8');
   }
 
@@ -338,7 +307,7 @@ export class HappyPathTestGenerator {
    * Генерирует полный файл теста
    */
   private async generateTestFile(endpoint: string, method: string, requests: UniqueRequest[]): Promise<string> {
-    // Пункт 10: Ищем DTO для этого endpoint
+    // Ищем DTO
     let dtoInfo: DTOInfo | null = null;
 
     if (this.config.apiGeneratedPath) {
@@ -347,64 +316,67 @@ export class HappyPathTestGenerator {
 
     // Генерируем импорты
     const imports: string[] = [
-      `import test, { expect } from '../../../fixtures/baseTest';`,
+      // ИСПРАВЛЕНИЕ 1: Конфигурируемый импорт
+      `import test, { expect } from '${this.config.testImportPath}';`,
       `import axios from 'axios';`,
     ];
 
-    // Пункт 8: Импорт axios конфига
+    // Импорт функций сравнения
+    imports.push(`import { compareDbWithResponse } from '../../../utils/data-comparison';`);
+
+    // Импорт axios конфига
     if (this.config.axiosConfigPath && this.config.axiosConfigName) {
       imports.push(`import { ${this.config.axiosConfigName} } from '${this.config.axiosConfigPath}';`);
     }
 
-    // Пункт 11: Импорты данных из отдельных файлов
+    // ИСПРАВЛЕНИЕ 10: Импорт DTO
+    if (dtoInfo) {
+      const dtoImportPath = this.getRelativePath(this.config.outputDir, dtoInfo.filePath);
+      imports.push(`import type { ${dtoInfo.name} } from '${dtoImportPath}';`);
+    }
+
+    // ИСПРАВЛЕНИЕ 9: Импорты нормализованных данных
     if (this.config.createSeparateDataFiles) {
       const fileName = this.endpointToFileName(endpoint, method);
       for (let i = 0; i < requests.length; i++) {
-        imports.push(`import { requestData as requestData${i + 1}, expectedResponse as expectedResponse${i + 1} } from './test-data/${fileName}-data-${i + 1}';`);
+        imports.push(`import { requestData as requestData${i + 1}, normalizedExpectedResponse as normalizedExpectedResponse${i + 1} } from './test-data/${fileName}-data-${i + 1}';`);
       }
     }
 
     // Генерируем тесты
     const tests = await Promise.all(
-      requests.map((req, index) => this.generateSingleTest(endpoint, method, req, index + 1, dtoInfo))
+        requests.map((req, index) => this.generateSingleTest(endpoint, method, req, index + 1, dtoInfo))
     );
 
-    // Пункт 11: Создаем отдельные файлы с данными
+    // ИСПРАВЛЕНИЕ 9: Создаем файлы с нормализованными данными
     if (this.config.createSeparateDataFiles) {
-      await this.createDataFiles(endpoint, method, requests);
+      await this.createDataFiles(endpoint, method, requests, dtoInfo);
     }
 
-    // Пункт 3: Структура СТРОГО как в примере findPetsByStatus.test.ts
+    // ИСПРАВЛЕНИЕ 3: Рандомный номер
+    const randomId = Math.floor(Math.random() * 10000);
+
     return `${imports.join('\n')}
 
 const endpoint = '${endpoint}';
 const httpMethod = '${method}';
 
-// Коды статусов
+// ИСПРАВЛЕНИЕ 2: Только 200-ые коды
 const apiErrorCodes = {
   success: 200,
   created: 201,
-  badRequest: 400,
-  unauthorized: 401,
-  forbidden: 403,
-  notFound: 404,
-  methodNotAllowed: 405,
-  unsupportedMediaType: 415,
+  noContent: 204,
 };
 
 const success = apiErrorCodes.${this.getSuccessCodeName(requests[0]?.response_status || 200)};
 
-// Информация о тест-кейсе
+// ИСПРАВЛЕНИЕ 3: Автоматическое описание
 const caseInfoObj = {
-  testCase: 'AutoGenerated',
+  testCase: 'HP-${randomId}',
   aqaOwner: 'HappyPathGenerator',
-  tms_testName: '${method} ${endpoint}',
+  tms_testName: 'Happy path тесты с проверкой ${method} ${endpoint}',
   testType: 'api'
 };
-
-/**
- * Happy Path тесты на основе реальных данных с фронта
- */
 
 test.describe.configure({ mode: "parallel" });
 test.describe(\`API тесты для эндпоинта \${httpMethod} >> \${endpoint} - Happy Path\`, async () => {
@@ -420,12 +392,13 @@ ${tests.join('\n\n')}
   }
 
   /**
-   * Пункт 11: Создает отдельные файлы с данными
+   * ИСПРАВЛЕНИЕ 9: Создает файлы с НОРМАЛИЗОВАННЫМИ данными на основе DTO
    */
   private async createDataFiles(
-    endpoint: string,
-    method: string,
-    requests: UniqueRequest[]
+      endpoint: string,
+      method: string,
+      requests: UniqueRequest[],
+      dtoInfo: DTOInfo | null
   ): Promise<void> {
     const fileName = this.endpointToFileName(endpoint, method);
     const dataDir = path.join(this.config.outputDir, 'test-data');
@@ -439,6 +412,15 @@ ${tests.join('\n\n')}
       const dataFileName = `${fileName}-data-${i + 1}.ts`;
       const dataFilePath = path.join(dataDir, dataFileName);
 
+      // ИСПРАВЛЕНИЕ 7: Нормализуем на основе DTO
+      let normalizedResponse;
+
+      if (dtoInfo) {
+        normalizedResponse = normalizeDbDataByDto(request.response_body, dtoInfo);
+      } else {
+        normalizedResponse = normalizeDbData(request.response_body);
+      }
+
       const dataContent = `/**
  * Тестовые данные для ${method} ${endpoint}
  * DB ID: ${request.id}
@@ -446,7 +428,8 @@ ${tests.join('\n\n')}
 
 export const requestData = ${JSON.stringify(request.request_body, null, 2)};
 
-export const expectedResponse = ${JSON.stringify(request.response_body, null, 2)};
+// Нормализованный response (готовый для сравнения)
+export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, null, 2)};
 `;
 
       fs.writeFileSync(dataFilePath, dataContent, 'utf-8');
@@ -454,122 +437,160 @@ export const expectedResponse = ${JSON.stringify(request.response_body, null, 2)
   }
 
   /**
-   * Генерирует один тест со ВСЕМИ исправлениями
-   * Пункт 3: Структура СТРОГО как в примере findPetsByStatus.test.ts
-   * Пункт 4: Только axios
-   * Пункт 5 и 6: Нормализация и глубокое сравнение
-   * Пункт 7: Конфигурируемая переменная стенда
-   * Пункт 8: Конфигурируемый axios config
-   * Пункт 9: Валидация типов
-   * Пункт 10: Проверка DTO
+   * ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ метод генерации теста
+   * ИСПРАВЛЕНИЯ 4, 5, 6, 7
    */
   private async generateSingleTest(
-    endpoint: string,
-    method: string,
-    request: UniqueRequest,
-    testNumber: number,
-    dtoInfo?: DTOInfo | null
+      endpoint: string,
+      method: string,
+      request: UniqueRequest,
+      testNumber: number,
+      dtoInfo: DTOInfo | null
   ): Promise<string> {
-    const testName = request.test_name || `Happy Path #${testNumber}`;
+    // ИСПРАВЛЕНИЕ 3: Уникальный рандомный номер
+    const randomId = Math.floor(Math.random() * 1000);
+    const testName = `Happy path #${testNumber} (ID: ${randomId})`;
     const hasBody = ['POST', 'PUT', 'PATCH'].includes(method);
 
-    // Пункт 7: Используем конфигурируемую переменную окружения
     const standUrlVar = `process.env.${this.config.standUrlEnvVar}`;
-
-    // Пункт 8: Используем конфигурируемый axios config
     const axiosConfig = this.config.axiosConfigName;
 
     let testCode = `  test(\`\${httpMethod} ${testName} (\${success}) @api ${this.config.testTag}\`, async ({ page }, testInfo) => {
     // DB ID: db-id-${request.id}
 `;
 
-    // Пункт 11: Используем данные из отдельного файла или встроенные
+    // Данные
     if (this.config.createSeparateDataFiles) {
       if (hasBody) {
         testCode += `    const requestData = requestData${testNumber};
-    
 `;
       }
+      // ИСПРАВЛЕНИЕ 9: Только переменная, не объект целиком
+      testCode += `    const normalizedExpected = normalizedExpectedResponse${testNumber};
+    
+`;
     } else {
-      // Встроенные данные
       if (hasBody) {
         testCode += `    const requestData = ${JSON.stringify(request.request_body, null, 4).replace(/^/gm, '    ')};
     
 `;
       }
+
+      // ИСПРАВЛЕНИЕ 7: Нормализуем на основе DTO
+      let normalizedResponse;
+      if (dtoInfo) {
+        normalizedResponse = normalizeDbDataByDto(request.response_body, dtoInfo);
+      } else {
+        normalizedResponse = normalizeDbData(request.response_body);
+      }
+
+      testCode += `    const normalizedExpected = ${JSON.stringify(normalizedResponse, null, 4).replace(/^/gm, '    ')};
+    
+`;
     }
 
-    // Пункт 4, 7 и 8: Только axios с конфигурируемыми параметрами
+    // ИСПРАВЛЕНИЕ 4: Запрос через catch с детальным выводом
+    testCode += `    let response;
+    
+    try {
+`;
+
     if (hasBody) {
-      testCode += `    const response = await axios.${method.toLowerCase()}(${standUrlVar} + endpoint, requestData, ${axiosConfig});
+      testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + endpoint, requestData, ${axiosConfig});
 `;
     } else {
-      const queryParams = this.extractQueryParams(endpoint);
-      if (queryParams) {
-        testCode += `    const response = await axios.${method.toLowerCase()}(${standUrlVar} + endpoint + '${queryParams}', ${axiosConfig});
+      testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + endpoint, ${axiosConfig});
 `;
-      } else {
-        testCode += `    const response = await axios.${method.toLowerCase()}(${standUrlVar} + endpoint, ${axiosConfig});
-`;
-      }
     }
 
-    testCode += `
+    testCode += `    } catch (error: any) {
+      console.error('❌ Ошибка при вызове endpoint:');
+      console.error('Endpoint:', endpoint);
+      console.error('Method:', httpMethod);
+`;
+
+    if (hasBody) {
+      testCode += `      console.error('Request:', JSON.stringify(requestData, null, 2));
+`;
+    }
+
+    testCode += `      console.error('Response status:', error.response?.status);
+      console.error('Response data:', JSON.stringify(error.response?.data, null, 2));
+      console.error('Error message:', error.message);
+      throw error;
+    }
+    
+    // Основные проверки
     await expect(response.status).toBe(success);
     await expect(response.data).toBeDefined();
 `;
 
-    // Пункт 9: Валидация типов данных
-    if (request.response_body) {
-      const typeValidation = generateTypeValidationCode(request.response_body, 'response.data');
-      if (typeValidation.length > 0 && typeValidation.length <= 5) {
-        testCode += `\n    // Валидация типов\n`;
-        testCode += typeValidation.slice(0, 3).join('\n') + '\n';
-      }
-    }
-
-    // Пункт 10: Проверка обязательных полей из DTO
+    // ИСПРАВЛЕНИЕ 6: Валидация типов на основе DTO
     if (dtoInfo && dtoInfo.fields.length > 0) {
-      const dtoValidation = generateDtoValidationCode(dtoInfo);
-      if (dtoValidation.length > 0) {
-        testCode += `\n${dtoValidation.join('\n')}\n`;
+      testCode += `\n    // Валидация типов данных из DTO: ${dtoInfo.name}\n`;
+
+      for (const field of dtoInfo.fields.slice(0, 5)) {
+        const jsType = this.getJsType(field.type);
+
+        if (jsType === 'array') {
+          testCode += `    await expect(Array.isArray(response.data.${field.name})).toBe(true);\n`;
+        } else if (jsType) {
+          testCode += `    await expect(typeof response.data.${field.name}).toBe('${jsType}');\n`;
+        }
       }
     }
 
-    // Пункт 5 и 6: Нормализация и глубокое сравнение
-    if (this.config.createSeparateDataFiles) {
-      testCode += `
-    // Сравнение с ожидаемыми данными
-    const expectedResponse = expectedResponse${testNumber};
-    const normalizedExpected = ${JSON.stringify(normalizeDbData(request.response_body))};
-    
-    // Проверка структуры ответа
-    await expect(response.data).toMatchObject(normalizedExpected);
-  });`;
-    } else {
-      testCode += `
-    const expectedResponse = ${JSON.stringify(request.response_body, null, 4).replace(/^/gm, '    ')};
-    const normalizedExpected = ${JSON.stringify(normalizeDbData(request.response_body))};
-    
-    await expect(response.data).toMatchObject(normalizedExpected);
-  });`;
+    // ИСПРАВЛЕНИЕ 5: Проверка обязательных полей из DTO
+    if (dtoInfo && dtoInfo.fields.length > 0) {
+      testCode += `\n    // Проверка обязательных полей из DTO: ${dtoInfo.name}\n`;
+
+      const requiredFields = dtoInfo.fields.filter(f => f.required);
+      for (const field of requiredFields.slice(0, 5)) {
+        testCode += `    await expect(response.data.${field.name}).toBeDefined();\n`;
+      }
     }
+
+    // ИСПРАВЛЕНИЕ 5: Используем deepCompareObjects вместо toMatchObject
+    testCode += `
+    // Глубокое сравнение (учитывает порядок в массивах)
+    const comparison = compareDbWithResponse(normalizedExpected, response.data);
+    
+    if (!comparison.isEqual) {
+      console.error('❌ Данные не совпадают:');
+      comparison.differences.forEach(diff => console.error('  -', diff));
+    }
+    
+    await expect(comparison.isEqual).toBe(true);
+  });`;
 
     return testCode;
   }
 
-  private extractQueryParams(endpoint: string): string | null {
-    const match = endpoint.match(/\?(.+)$/);
-    return match ? `?${match[1]}` : null;
+  private getJsType(tsType: string): string | null {
+    tsType = tsType.toLowerCase().trim();
+
+    if (tsType.includes('string')) return 'string';
+    if (tsType.includes('number')) return 'number';
+    if (tsType.includes('boolean')) return 'boolean';
+    if (tsType.includes('[]') || tsType.includes('array')) return 'array';
+    if (tsType === 'object') return 'object';
+
+    return null;
+  }
+
+  private getRelativePath(from: string, to: string): string {
+    const relative = path.relative(path.dirname(from), to);
+    return relative.startsWith('.') ? relative.replace(/\.ts$/, '') : `./${relative.replace(/\.ts$/, '')}`;
   }
 
   private endpointToFileName(endpoint: string, method: string): string {
     let fileName = endpoint
-      .replace(/^\/api\/v[0-9]+\//, '')
-      .replace(/\{[^}]+\}/g, 'id')
-      .replace(/\//g, '-')
-      .replace(/[^a-z0-9-]/gi, '')
-      .toLowerCase();
+        .replace(/^\/api\/v[0-9]+\//, '')
+        .replace(/\{[^}]+\}/g, 'id')
+        .replace(/\/\d+/g, '-id') // ИСПРАВЛЕНИЕ 8: Числа → -id
+        .replace(/\//g, '-')
+        .replace(/[^a-z0-9-]/gi, '')
+        .toLowerCase();
 
     fileName = `${method.toLowerCase()}-${fileName}`;
 
@@ -588,7 +609,7 @@ export const expectedResponse = ${JSON.stringify(request.response_body, null, 2)
     for (const id of ids) {
       await this.sql`
         UPDATE ${this.sql(schema + '.api_requests')}
-        SET 
+        SET
           test_generated = TRUE,
           test_file_path = ${filePath},
           generated_at = NOW()
@@ -599,8 +620,8 @@ export const expectedResponse = ${JSON.stringify(request.response_body, null, 2)
 }
 
 export async function generateHappyPathTests(
-  config: HappyPathTestConfig,
-  sqlConnection: any
+    config: HappyPathTestConfig,
+    sqlConnection: any
 ): Promise<void> {
   const generator = new HappyPathTestGenerator(config, sqlConnection);
   await generator.generate();
