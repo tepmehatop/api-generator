@@ -9,37 +9,13 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./finance": {
-      "types": "./dist/finance/index.d.ts",
-      "default": "./dist/finance/index.js"
+    "./utils/*": {
+      "types": "./dist/utils/*.d.ts",
+      "default": "./dist/utils/*.js"
     },
-    "./dist/finance": {
-      "types": "./dist/finance/index.d.ts",
-      "default": "./dist/finance/index.js"
-    },
-    "./finance/*": {
-      "types": "./dist/finance/*.d.ts",
-      "default": "./dist/finance/*.js"
-    },
-    "./dist/finance/*": {
-      "types": "./dist/finance/*.d.ts",
-      "default": "./dist/finance/*.js"
-    },
-    "./orders": {
-      "types": "./dist/orders/index.d.ts",
-      "default": "./dist/orders/index.js"
-    },
-    "./dist/orders": {
-      "types": "./dist/orders/index.d.ts",
-      "default": "./dist/orders/index.js"
-    },
-    "./orders/*": {
-      "types": "./dist/orders/*.d.ts",
-      "default": "./dist/orders/*.js"
-    },
-    "./dist/orders/*": {
-      "types": "./dist/orders/*.d.ts",
-      "default": "./dist/orders/*.js"
+    "./dist/utils/*": {
+      "types": "./dist/utils/*.d.ts",
+      "default": "./dist/utils/*.js"
     }
   },
   "bin": {

@@ -28,8 +28,8 @@ const distItems = fs.readdirSync(distPath, { withFileTypes: true });
 
 // Служебные файлы/папки которые не являются API
 const excludeItems = [
-  'index.js', 
-  'index.d.ts', 
+  'index.js',
+  'index.d.ts',
   'index.js.map',
   'index.d.ts.map',
   'generator.js',
@@ -40,11 +40,17 @@ const excludeItems = [
   'test-generator.d.ts',
   'database-analyzer.js',
   'database-analyzer.d.ts',
+  'happy-path-generator.js',
+  'happy-path-generator.d.ts',
+  'test-collector.js',
+  'test-collector.d.ts',
+  'comparator.js',
+  'comparator.d.ts',
   'http-client.js',
   'http-client.d.ts',
   'example.js',
-  'example.d.ts',
-  'utils'
+  'example.d.ts'
+  // 'utils' - УДАЛЕНО, теперь utils будет экспортироваться!
 ];
 
 // Находим все API папки
