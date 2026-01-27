@@ -1,9 +1,18 @@
 /**
  * Генератор API тестов из сгенерированных API методов
+ * ВЕРСИЯ 13.0 - ИНТЕГРАЦИЯ С HAPPY PATH ДАННЫМИ
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
+import axios from 'axios';
+import {
+  fetchHappyPathData,
+  extractRequiredFieldsData,
+  extractAllFieldsData,
+  generatePairwiseCombinations,
+  HappyPathData
+} from './utils/happy-path-data-fetcher';
 
 export interface ApiTestConfig {
   /**
@@ -48,6 +57,48 @@ export interface ApiTestConfig {
    * @default false
    */
   generatePairwiseTests?: boolean;
+
+  /**
+   * НОВОЕ v13.0: Использовать данные из Happy Path тестов
+   * @default true
+   */
+  useHappyPathData?: boolean;
+
+  /**
+   * НОВОЕ v13.0: Функция подключения к БД (sql tagged template)
+   * Необходимо для получения данных из Happy Path тестов
+   */
+  dbConnection?: any;
+
+  /**
+   * НОВОЕ v13.0: Схема БД для Happy Path данных
+   * @default 'qa'
+   */
+  dbSchema?: string;
+
+  /**
+   * НОВОЕ v13.0: Количество записей Happy Path для выборки
+   * @default 15
+   */
+  happyPathSamplesCount?: number;
+
+  /**
+   * НОВОЕ v13.0: Количество попыток подбора данных для получения 200 ответа
+   * @default 10
+   */
+  maxDataGenerationAttempts?: number;
+
+  /**
+   * НОВОЕ v13.0: URL стенда для тестового вызова при генерации данных
+   * @default process.env.StandURL
+   */
+  standUrl?: string;
+
+  /**
+   * НОВОЕ v13.0: Токен авторизации для тестового вызова
+   * @default process.env.AUTH_TOKEN
+   */
+  authToken?: string;
 }
 
 interface ExtractedMethod {
@@ -86,6 +137,12 @@ export async function generateApiTests(config: ApiTestConfig): Promise<void> {
     baseTestPath: '../../../fixtures/baseTest',
     axiosHelpersPath: '../../../helpers/axiosHelpers',
     apiTestHelperPath: '../../../helpers/apiTestHelper',
+    useHappyPathData: true,
+    dbSchema: 'qa',
+    happyPathSamplesCount: 15,
+    maxDataGenerationAttempts: 10,
+    standUrl: process.env.StandURL,
+    authToken: process.env.AUTH_TOKEN,
     ...config
   };
   
@@ -140,8 +197,8 @@ export async function generateApiTests(config: ApiTestConfig): Promise<void> {
       const protectedAreas = extractProtectedAreas(existingContent);
       
       // Генерируем новое содержимое
-      const newContent = generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
-      
+      const newContent = await generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
+
       // Восстанавливаем protected области
       const finalContent = restoreProtectedAreas(newContent, protectedAreas);
       
@@ -150,7 +207,7 @@ export async function generateApiTests(config: ApiTestConfig): Promise<void> {
       updatedCount++;
     } else {
       // Новый файл
-      const testContent = generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
+      const testContent = await generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
       fs.writeFileSync(testFilePath, testContent);
       console.log(`  ✅ ${testFileName} (создан)`);
       generatedCount++;
@@ -388,24 +445,111 @@ function generateTestFileName(method: ExtractedMethod): string {
 }
 
 /**
+ * НОВОЕ v13.0: Создает файл с данными из Happy Path
+ */
+function createHappyPathDataFile(
+  methodName: string,
+  happyPathData: HappyPathData[],
+  outputDir: string
+): string {
+  const testDataDir = path.join(outputDir, 'testData');
+
+  // Создаем папку testData если её нет
+  if (!fs.existsSync(testDataDir)) {
+    fs.mkdirSync(testDataDir, { recursive: true });
+  }
+
+  const dataFileName = `${methodName}.data.ts`;
+  const dataFilePath = path.join(testDataDir, dataFileName);
+
+  // Генерируем содержимое файла
+  const lines: string[] = [];
+
+  lines.push('/**');
+  lines.push(` * Тестовые данные для ${methodName}`);
+  lines.push(' * Из Happy Path тестов (qa.api_requests)');
+  lines.push(' * @generated');
+  lines.push(' */');
+  lines.push('');
+
+  // Экспортируем данные
+  lines.push('export const dbTestData = {');
+  lines.push('  happyPath: [');
+
+  happyPathData.forEach((data, index) => {
+    const requestBody = data.request_body || {};
+    const rowStr = JSON.stringify(requestBody, null, 4);
+    const comma = index < happyPathData.length - 1 ? ',' : '';
+    lines.push(`    ${rowStr}${comma}`);
+  });
+
+  lines.push('  ]');
+  lines.push('} as const;');
+  lines.push('');
+
+  // Экспортируем вспомогательные функции
+  lines.push('// Получить все данные');
+  lines.push('export const getHappyPathData = () => dbTestData.happyPath;');
+  lines.push('');
+  lines.push('// Получить случайную запись');
+  lines.push('export const getRandomHappyPath = () => {');
+  lines.push('  const data = dbTestData.happyPath;');
+  lines.push('  return data[Math.floor(Math.random() * data.length)];');
+  lines.push('};');
+  lines.push('');
+
+  // Записываем файл
+  fs.writeFileSync(dataFilePath, lines.join('\n'));
+
+  console.log(`  ✓ Создан файл с Happy Path данными: ${path.relative(process.cwd(), dataFilePath)}`);
+
+  // Возвращаем относительный путь для импорта
+  return `./testData/${dataFileName.replace('.ts', '')}`;
+}
+
+/**
  * Генерирует содержимое теста для метода
  */
-function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTestConfig>): string {
+async function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTestConfig>): Promise<string> {
   const lines: string[] = [];
-  
+
+  // НОВОЕ v13.0: Получаем данные из Happy Path тестов
+  let happyPathData: HappyPathData[] = [];
+  if (config.useHappyPathData && config.dbConnection) {
+    console.log(`\n  📊 Получение Happy Path данных для ${method.name}...`);
+    try {
+      happyPathData = await fetchHappyPathData(
+        method.path,
+        method.httpMethod,
+        {
+          dbConnection: config.dbConnection,
+          dbSchema: config.dbSchema,
+          samplesCount: config.happyPathSamplesCount
+        }
+      );
+    } catch (error: any) {
+      console.warn(`  ⚠️  Ошибка получения Happy Path данных: ${error.message}`);
+    }
+  }
+
+  // НОВОЕ v13.0: Создаем файл с данными если есть Happy Path данные
+  if (happyPathData.length > 0) {
+    createHappyPathDataFile(method.name, happyPathData, config.outputDir);
+  }
+
   // Проверяем наличие файла с данными
   const testFileName = method.name + '.test.ts';
   const testDataDir = path.join(config.outputDir, 'testData');
   const testDataFileName = method.name + '.data.ts';
   const testDataFilePath = path.join(testDataDir, testDataFileName);
-  const hasTestData = fs.existsSync(testDataFilePath);
-  
+  const hasTestData = fs.existsSync(testDataFilePath) || happyPathData.length > 0;
+
   // Импорты
   lines.push(`import test, { expect } from '${config.baseTestPath}';`);
   lines.push("import axios from 'axios';");
   lines.push(`import { configApiHeaderAdmin, configApiHeaderNoRights } from '${config.axiosHelpersPath}';`);
   lines.push(`import { getMessageFromResponse, getMessageFromError } from '${config.apiTestHelperPath || '../../../helpers/apiTestHelper'}';`);
-  
+
   // Добавляем импорт данных если файл существует
   if (hasTestData) {
     lines.push(`import { dbTestData } from './testData/${method.name}.data';`);
@@ -468,7 +612,6 @@ function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTest
   lines.push('  forbidden: 403,');
   lines.push('  notFound: 404,');
   lines.push('  methodNotAllowed: 405,');
-  lines.push('  unsupportedMediaType: 415,');
   lines.push('};');
   lines.push('');
   
@@ -477,7 +620,6 @@ function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTest
   lines.push('const forbidden = apiErrorCodes.forbidden;');
   lines.push('const notFound = apiErrorCodes.notFound;');
   lines.push('const methodNotAllowed = apiErrorCodes.methodNotAllowed;');
-  lines.push('const unsupportedMediaType = apiErrorCodes.unsupportedMediaType;');
   lines.push(`const success = ${getSuccessCode(method)};`);
   lines.push('');
   
@@ -502,7 +644,6 @@ function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTest
   if (method.hasAuth) {
     lines.push(' * - С токеном пользователя без прав (403)');
   }
-  lines.push(' * - С неверными заголовками Content-Type (415)');
   if (hasIdParams) {
     lines.push(' * - С несуществующим ID (404)');
   }
@@ -569,26 +710,8 @@ function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTest
       lines.push('  });');
       lines.push('');
     }
-    
-    // Тест 7: С неверным Content-Type (415)
-    if (hasBodyParam(method)) {
-      lines.push(`  test(\`\${httpMethod} с неверным Content-Type (\${unsupportedMediaType}) @api\`, async ({ page }, testInfo) => {`);
-      lines.push('    const wrongHeaders = {');
-      lines.push('      headers: {');
-      lines.push("        'Authorization': `Bearer ${process.env.AUTH_TOKEN}`,");
-      lines.push("        'Content-Type': 'application/xml',");
-      lines.push('      }');
-      lines.push('    };');
-      const axiosCallWrongType = generateSimpleAxiosCall(method, true, false, 'wrongHeaders');
-      lines.push(`    await ${axiosCallWrongType}.catch(async function(error) {`);
-      lines.push('      await expect(error.response.status).toBe(unsupportedMediaType);');
-      lines.push('      await expect(error.response.statusText).toContain("Unsupported Media Type");');
-      lines.push('    });');
-      lines.push('  });');
-      lines.push('');
-    }
-    
-    // Тест 8: 404 для несуществующего ресурса
+
+    // Тест 7: 404 для несуществующего ресурса
     if (hasIdParams) {
       lines.push(`  test(\`\${httpMethod} с несуществующим ID (\${notFound}) @api\`, async ({ page }, testInfo) => {`);
       // Переопределяем ID на несуществующий

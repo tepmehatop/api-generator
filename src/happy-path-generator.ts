@@ -1,6 +1,6 @@
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 11.0 - ВСЕ ИСПРАВЛЕНИЯ ПРИМЕНЕНЫ
+ * ВЕРСИЯ 12.0 - ДЕДУПЛИКАЦИЯ И ВАЛИДАЦИЯ ДАННЫХ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -13,6 +13,11 @@
  * 8. Исправлен mergeDuplicateTests (нормализация endpoint)
  * 9. createSeparateDataFiles - нормализация во внешнем файле
  * 10. Импорт DTO в тест
+ * 11. Динамический импорт compareDbWithResponse из NPM пакета (packageName)
+ * 12. Реальный endpoint с подставленными ID вместо {id}
+ * 13. Улучшенный вывод различий с цветами (блочный формат)
+ * 14. НОВОЕ: Дедупликация тестов (Идея 1 + 2)
+ * 15. НОВОЕ: Валидация данных (Стратегия 1 - проверка актуальности)
  */
 
 import * as fs from 'fs';
@@ -24,6 +29,9 @@ import {
   normalizeDbData,
   normalizeDbDataByDto
 } from './utils/data-comparison';
+import { deduplicateTests } from './utils/test-deduplication';
+import { validateRequests } from './utils/data-validation';
+import axios from 'axios';
 
 export interface HappyPathTestConfig {
   outputDir: string;
@@ -45,6 +53,33 @@ export interface HappyPathTestConfig {
 
   // НОВОЕ: Откуда импортировать test и expect
   testImportPath?: string; // По умолчанию '@playwright/test'
+
+  // НОВОЕ: Название NPM пакета для импорта утилит
+  packageName?: string; // По умолчанию '@your-company/api-codegen'
+
+  // НОВОЕ v12.0: Дедупликация тестов
+  deduplication?: {
+    enabled?: boolean; // По умолчанию true
+    ignoreFields?: string[]; // Поля которые игнорируем при сравнении (id, *_id, created_at и т.д.)
+    significantFields?: string[]; // Поля которые важны (status, type, role и т.д.)
+    detectEdgeCases?: boolean; // Обнаруживать edge cases (пустые массивы, null и т.д.)
+    maxTestsPerEndpoint?: number; // Максимум тестов на эндпоинт (перегружает основной maxTestsPerEndpoint)
+    preserveTaggedTests?: string[]; // Теги которые защищают тест от удаления ([KEEP], [IMPORTANT])
+  };
+
+  // НОВОЕ v12.0: Валидация данных (проверка актуальности)
+  dataValidation?: {
+    enabled?: boolean; // По умолчанию true
+    validateBeforeGeneration?: boolean; // Проверять актуальность данных перед генерацией
+    onStaleData?: 'update' | 'skip' | 'delete'; // Что делать с устаревшими данными
+    staleIfChanged?: string[]; // Какие поля определяют что данные устарели (status, state и т.д.)
+    allowChanges?: string[]; // Какие изменения допустимы (timestamps, даты)
+    validateInDatabase?: boolean; // Проверять данные в БД стенда
+    standUrl?: string; // URL стенда для валидации (по умолчанию process.env[standUrlEnvVar])
+    axiosConfig?: any; // Конфиг axios для валидации
+    logChanges?: boolean; // Логировать изменения данных
+    logPath?: string; // Путь для логов
+  };
 }
 
 interface UniqueRequest {
@@ -64,6 +99,18 @@ export class HappyPathTestGenerator {
   private config: Required<HappyPathTestConfig>;
 
   constructor(config: HappyPathTestConfig, sqlConnection: any) {
+    // Читаем package.json для получения названия пакета
+    let defaultPackageName = '@your-company/api-codegen';
+    try {
+      const packageJsonPath = path.join(__dirname, '../../package.json');
+      if (fs.existsSync(packageJsonPath)) {
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+        defaultPackageName = packageJson.name || defaultPackageName;
+      }
+    } catch (error) {
+      console.warn('⚠️  Не удалось прочитать package.json, используется название по умолчанию');
+    }
+
     this.config = {
       endpointFilter: [],
       methodFilter: [],
@@ -79,7 +126,34 @@ export class HappyPathTestGenerator {
       createSeparateDataFiles: false,
       mergeDuplicateTests: true,
       testImportPath: '@playwright/test', // ИСПРАВЛЕНИЕ 1
-      ...config
+      packageName: defaultPackageName, // ИСПРАВЛЕНИЕ 11: Автоматически из package.json
+      ...config,
+
+      // НОВОЕ v12.0: Дефолтные настройки дедупликации
+      deduplication: {
+        enabled: true,
+        ignoreFields: ['id', '*_id', 'created_at', 'updated_at', 'modified_at', 'deleted_at', 'timestamp', '*_timestamp', 'uuid', 'guid'],
+        significantFields: ['status', 'state', 'type', 'role', 'category', 'kind'],
+        detectEdgeCases: true,
+        maxTestsPerEndpoint: 2, // Максимум 2 теста на эндпоинт (как указал пользователь)
+        preserveTaggedTests: ['[KEEP]', '[IMPORTANT]'],
+        ...(config.deduplication || {})
+      },
+
+      // НОВОЕ v12.0: Дефолтные настройки валидации
+      dataValidation: {
+        enabled: true,
+        validateBeforeGeneration: true,
+        onStaleData: 'delete', // Удаляем устаревшие (как указал пользователь)
+        staleIfChanged: ['status', 'state', 'type', 'role', 'category'],
+        allowChanges: ['updated_at', 'modified_at', '*_timestamp', '*_at'],
+        validateInDatabase: false, // По умолчанию выключено (нужна настройка)
+        standUrl: undefined,
+        axiosConfig: undefined,
+        logChanges: true,
+        logPath: './happy-path-validation-logs',
+        ...(config.dataValidation || {})
+      }
     };
 
     this.sql = sqlConnection;
@@ -89,8 +163,36 @@ export class HappyPathTestGenerator {
     console.log('🔍 Подключаюсь к БД и собираю данные...');
     console.log(this.config.force ? '⚠️  FORCE режим' : 'ℹ️  Инкрементальный режим');
 
-    const uniqueRequests = await this.fetchUniqueRequests();
+    let uniqueRequests = await this.fetchUniqueRequests();
     console.log(`📊 Найдено ${uniqueRequests.length} уникальных запросов`);
+
+    // НОВОЕ v12.0: Валидация данных (проверка актуальности)
+    if (this.config.dataValidation.enabled && this.config.dataValidation.validateBeforeGeneration) {
+      try {
+        const validationResult = await validateRequests(
+          uniqueRequests,
+          this.config.dataValidation,
+          axios
+        );
+
+        uniqueRequests = validationResult.validRequests;
+
+        console.log(`\n✅ Валидация завершена:`);
+        console.log(`   Осталось запросов: ${uniqueRequests.length}`);
+        if (validationResult.updatedCount > 0) {
+          console.log(`   Обновлено: ${validationResult.updatedCount}`);
+        }
+        if (validationResult.deletedCount > 0) {
+          console.log(`   Удалено устаревших: ${validationResult.deletedCount}`);
+        }
+        if (validationResult.skippedCount > 0) {
+          console.log(`   Пропущено: ${validationResult.skippedCount}`);
+        }
+      } catch (error) {
+        console.error('❌ Ошибка при валидации данных:', error);
+        console.log('⚠️  Продолжаю без валидации');
+      }
+    }
 
     const grouped = this.config.mergeDuplicateTests
         ? this.groupByStructure(uniqueRequests)
@@ -220,6 +322,18 @@ export class HappyPathTestGenerator {
       requests: UniqueRequest[]
   ): Promise<{ total: number; added: number }> {
     const [method, endpoint] = endpointKey.split(':');
+
+    // НОВОЕ v12.0: Дедупликация тестов (Идея 1 + 2)
+    if (this.config.deduplication.enabled && requests.length > 1) {
+      const beforeCount = requests.length;
+      requests = deduplicateTests(requests, this.config.deduplication);
+      const afterCount = requests.length;
+
+      if (beforeCount !== afterCount) {
+        console.log(`  🔄 Дедупликация ${endpoint}: ${beforeCount} → ${afterCount} тестов`);
+      }
+    }
+
     const fileName = this.endpointToFileName(endpoint, method);
 
     const filePath = path.join(this.config.outputDir, `${fileName}.happy-path.test.ts`);
@@ -321,8 +435,8 @@ export class HappyPathTestGenerator {
       `import axios from 'axios';`,
     ];
 
-    // Импорт функций сравнения
-    imports.push(`import { compareDbWithResponse } from '../../../utils/data-comparison';`);
+    // ИСПРАВЛЕНИЕ 11: Импорт функций сравнения из NPM пакета
+    imports.push(`import { compareDbWithResponse, formatDifferencesAsBlocks } from '${this.config.packageName}/dist/utils/data-comparison';`);
 
     // Импорт axios конфига
     if (this.config.axiosConfigPath && this.config.axiosConfigName) {
@@ -457,6 +571,8 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 
     let testCode = `  test(\`\${httpMethod} ${testName} (\${success}) @api ${this.config.testTag}\`, async ({ page }, testInfo) => {
     // DB ID: db-id-${request.id}
+    // ИСПРАВЛЕНИЕ 12: Реальный endpoint с подставленными параметрами пути
+    const actualEndpoint = '${request.endpoint}';
 `;
 
     // Данные
@@ -491,21 +607,22 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 
     // ИСПРАВЛЕНИЕ 4: Запрос через catch с детальным выводом
     testCode += `    let response;
-    
+
     try {
 `;
 
     if (hasBody) {
-      testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + endpoint, requestData, ${axiosConfig});
+      testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
 `;
     } else {
-      testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + endpoint, ${axiosConfig});
+      testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
 `;
     }
 
     testCode += `    } catch (error: any) {
       console.error('❌ Ошибка при вызове endpoint:');
-      console.error('Endpoint:', endpoint);
+      console.error('Endpoint template:', endpoint);
+      console.error('Actual endpoint:', actualEndpoint);
       console.error('Method:', httpMethod);
 `;
 
@@ -551,15 +668,15 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     }
 
     // ИСПРАВЛЕНИЕ 5: Используем deepCompareObjects вместо toMatchObject
+    // ИСПРАВЛЕНИЕ 13: Улучшенный вывод различий с цветами (блочный формат)
     testCode += `
     // Глубокое сравнение (учитывает порядок в массивах)
     const comparison = compareDbWithResponse(normalizedExpected, response.data);
-    
+
     if (!comparison.isEqual) {
-      console.error('❌ Данные не совпадают:');
-      comparison.differences.forEach(diff => console.error('  -', diff));
+      console.log(formatDifferencesAsBlocks(comparison.differences));
     }
-    
+
     await expect(comparison.isEqual).toBe(true);
   });`;
 

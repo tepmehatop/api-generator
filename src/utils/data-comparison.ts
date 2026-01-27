@@ -278,3 +278,215 @@ export function compareDbWithResponse(dbData: any, responseData: any): {
     normalizedResponse
   };
 }
+
+/**
+ * ANSI color codes для консоли
+ */
+const colors = {
+  reset: '\x1b[0m',
+  green: '\x1b[32m',      // Ожидаемое значение
+  red: '\x1b[31m',        // Фактическое значение
+  yellow: '\x1b[33m',     // Path/заголовки
+  cyan: '\x1b[36m',       // Дополнительная информация
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+};
+
+/**
+ * ВАРИАНТ 1: Табличный формат
+ *
+ * Пример вывода:
+ * ┌──────────────┬────────────────┬────────────────┐
+ * │ Path         │ Expected       │ Actual         │
+ * ├──────────────┼────────────────┼────────────────┤
+ * │ root.id      │ 123            │ 124            │
+ * │ root.status  │ active         │ pending        │
+ * └──────────────┴────────────────┴────────────────┘
+ */
+export function formatDifferencesAsTable(differences: string[]): string {
+  if (differences.length === 0) return '';
+
+  const rows: { path: string; expected: string; actual: string }[] = [];
+
+  // Парсим differences
+  for (const diff of differences) {
+    const match = diff.match(/^(.+?):\s*(?:type mismatch - )?expected (.+?), got (.+)$/);
+    if (match) {
+      rows.push({
+        path: match[1].trim(),
+        expected: match[2].trim(),
+        actual: match[3].trim(),
+      });
+    } else {
+      // Для других форматов (например "missing in actual")
+      rows.push({
+        path: diff.split(':')[0] || '',
+        expected: '-',
+        actual: diff.split(':')[1]?.trim() || diff,
+      });
+    }
+  }
+
+  // Вычисляем ширину колонок
+  const pathWidth = Math.max(12, ...rows.map(r => r.path.length)) + 2;
+  const expectedWidth = Math.max(14, ...rows.map(r => r.expected.length)) + 2;
+  const actualWidth = Math.max(14, ...rows.map(r => r.actual.length)) + 2;
+
+  const line = (left: string, mid: string, right: string, sep: string) =>
+    left + sep.repeat(pathWidth) + mid + sep.repeat(expectedWidth) + mid + sep.repeat(actualWidth) + right;
+
+  let output = '\n' + colors.bold + colors.yellow + '❌ Данные не совпадают:' + colors.reset + '\n\n';
+  output += line('┌', '┬', '┐', '─') + '\n';
+  output += `│ ${colors.bold}Path${colors.reset}${' '.repeat(pathWidth - 5)}│ ${colors.green}${colors.bold}Expected${colors.reset}${' '.repeat(expectedWidth - 9)}│ ${colors.red}${colors.bold}Actual${colors.reset}${' '.repeat(actualWidth - 7)}│\n`;
+  output += line('├', '┼', '┤', '─') + '\n';
+
+  for (const row of rows) {
+    const pathPadded = row.path + ' '.repeat(Math.max(0, pathWidth - row.path.length - 1));
+    const expectedPadded = row.expected + ' '.repeat(Math.max(0, expectedWidth - row.expected.length - 1));
+    const actualPadded = row.actual + ' '.repeat(Math.max(0, actualWidth - row.actual.length - 1));
+
+    output += `│ ${colors.yellow}${pathPadded}${colors.reset}│ ${colors.green}${expectedPadded}${colors.reset}│ ${colors.red}${actualPadded}${colors.reset}│\n`;
+  }
+
+  output += line('└', '┴', '┘', '─') + '\n';
+
+  return output;
+}
+
+/**
+ * ВАРИАНТ 2: Git-style Diff формат
+ *
+ * Пример вывода:
+ * --- Expected
+ * +++ Actual
+ *
+ * @ root.id
+ * - 123
+ * + 124
+ *
+ * @ root.status
+ * - active
+ * + pending
+ */
+export function formatDifferencesAsGitDiff(differences: string[]): string {
+  if (differences.length === 0) return '';
+
+  let output = '\n' + colors.bold + colors.yellow + '❌ Данные не совпадают:' + colors.reset + '\n\n';
+  output += colors.green + '--- Expected' + colors.reset + '\n';
+  output += colors.red + '+++ Actual' + colors.reset + '\n\n';
+
+  for (const diff of differences) {
+    const match = diff.match(/^(.+?):\s*(?:type mismatch - )?expected (.+?), got (.+)$/);
+    if (match) {
+      const path = match[1].trim();
+      const expected = match[2].trim();
+      const actual = match[3].trim();
+
+      output += colors.cyan + `@ ${path}` + colors.reset + '\n';
+      output += colors.green + `- ${expected}` + colors.reset + '\n';
+      output += colors.red + `+ ${actual}` + colors.reset + '\n\n';
+    } else {
+      output += colors.dim + diff + colors.reset + '\n\n';
+    }
+  }
+
+  return output;
+}
+
+/**
+ * ВАРИАНТ 3: Блочный список с цветными блоками
+ *
+ * Пример вывода:
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * 🔍 Path: root.id
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ *   ✅ Expected: 123
+ *   ❌ Actual:   124
+ *
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ * 🔍 Path: root.status
+ * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ *   ✅ Expected: active
+ *   ❌ Actual:   pending
+ */
+export function formatDifferencesAsBlocks(differences: string[]): string {
+  if (differences.length === 0) return '';
+
+  let output = '\n' + colors.bold + colors.yellow + '❌ Данные не совпадают:' + colors.reset + '\n';
+
+  for (const diff of differences) {
+    const match = diff.match(/^(.+?):\s*(?:type mismatch - )?expected (.+?), got (.+)$/);
+    if (match) {
+      const path = match[1].trim();
+      const expected = match[2].trim();
+      const actual = match[3].trim();
+
+      output += '\n' + colors.dim + '━'.repeat(50) + colors.reset + '\n';
+      output += colors.cyan + `🔍 Path: ${colors.bold}${path}${colors.reset}\n`;
+      output += colors.dim + '━'.repeat(50) + colors.reset + '\n';
+      output += `  ${colors.green}✅ Expected: ${colors.bold}${expected}${colors.reset}\n`;
+      output += `  ${colors.red}❌ Actual:   ${colors.bold}${actual}${colors.reset}\n`;
+    } else {
+      output += '\n' + colors.dim + '━'.repeat(50) + colors.reset + '\n';
+      output += colors.yellow + `⚠️  ${diff}` + colors.reset + '\n';
+    }
+  }
+
+  output += '\n';
+  return output;
+}
+
+/**
+ * ВАРИАНТ 4: JSON Side-by-side (упрощенный)
+ *
+ * Пример вывода:
+ * ╔══════════════════════════════════════════════════════════╗
+ * ║  EXPECTED                    ACTUAL                      ║
+ * ╠══════════════════════════════════════════════════════════╣
+ * ║  {                           {                           ║
+ * ║    "id": 123,                  "id": 124,                ║
+ * ║    "status": "active"          "status": "pending"       ║
+ * ║  }                           }                           ║
+ * ╚══════════════════════════════════════════════════════════╝
+ *
+ * Differences:
+ * • root.id: 123 → 124
+ * • root.status: active → pending
+ */
+export function formatDifferencesAsJsonSideBySide(
+  differences: string[],
+  normalizedExpected: any,
+  normalizedActual: any
+): string {
+  if (differences.length === 0) return '';
+
+  let output = '\n' + colors.bold + colors.yellow + '❌ Данные не совпадают:' + colors.reset + '\n\n';
+
+  // JSON представление
+  const expectedJson = JSON.stringify(normalizedExpected, null, 2);
+  const actualJson = JSON.stringify(normalizedActual, null, 2);
+
+  output += colors.green + colors.bold + '✅ EXPECTED:' + colors.reset + '\n';
+  output += colors.green + expectedJson + colors.reset + '\n\n';
+
+  output += colors.red + colors.bold + '❌ ACTUAL:' + colors.reset + '\n';
+  output += colors.red + actualJson + colors.reset + '\n\n';
+
+  output += colors.yellow + colors.bold + 'DIFFERENCES:' + colors.reset + '\n';
+
+  for (const diff of differences) {
+    const match = diff.match(/^(.+?):\s*(?:type mismatch - )?expected (.+?), got (.+)$/);
+    if (match) {
+      const path = match[1].trim();
+      const expected = match[2].trim();
+      const actual = match[3].trim();
+
+      output += `  ${colors.cyan}•${colors.reset} ${colors.dim}${path}:${colors.reset} ${colors.green}${expected}${colors.reset} ${colors.yellow}→${colors.reset} ${colors.red}${actual}${colors.reset}\n`;
+    } else {
+      output += `  ${colors.cyan}•${colors.reset} ${colors.dim}${diff}${colors.reset}\n`;
+    }
+  }
+
+  output += '\n';
+  return output;
+}

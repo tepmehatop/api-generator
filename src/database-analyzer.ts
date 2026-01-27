@@ -1,6 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import axios from 'axios';
+import {
+  fetchHappyPathData,
+  extractAllFieldsData,
+  HappyPathData
+} from './utils/happy-path-data-fetcher';
 
 /**
  * Конфигурация для анализа БД и генерации тестовых данных
@@ -74,6 +79,24 @@ export interface DatabaseAnalyzerConfig {
     stage2?: boolean;  // Детальные логи Этапа 2
     stage3?: boolean;  // Детальные логи Этапа 3
   };
+
+  /**
+   * НОВОЕ v13.0: Использовать данные из Happy Path тестов
+   * @default true
+   */
+  useHappyPathData?: boolean;
+
+  /**
+   * НОВОЕ v13.0: Схема БД для Happy Path данных
+   * @default 'qa'
+   */
+  happyPathSchema?: string;
+
+  /**
+   * НОВОЕ v13.0: Количество попыток подбора данных для получения 200 ответа
+   * @default 10
+   */
+  maxAttempts?: number;
 }
 
 /**
@@ -150,6 +173,9 @@ export class DatabaseAnalyzer {
       authToken: undefined,
       stages: { ...defaultStages, ...(config.stages || {}) },
       verboseStages: { ...defaultVerbose, ...(config.verboseStages || {}) },
+      useHappyPathData: true,
+      happyPathSchema: 'qa',
+      maxAttempts: 10,
       ...config
     } as Required<DatabaseAnalyzerConfig>;
     
@@ -905,6 +931,152 @@ export class DatabaseAnalyzer {
     return Array.from(related);
   }
   
+  /**
+   * НОВОЕ v13.0: Пытается получить 200 ответ с множественными попытками
+   * Использует данные из Happy Path тестов и существующие данные из БД
+   */
+  private async tryGetSuccessfulResponse(
+    endpoint: string,
+    method: string,
+    dtoFields: string[]
+  ): Promise<{ success: boolean; data: Record<string, any> | null; statusCode: number }> {
+    const baseUrl = process.env.StandURL || 'http://localhost:3000';
+    const url = baseUrl + endpoint;
+    const verbose = this.config.verboseStages!.stage3;
+    const maxAttempts = this.config.maxAttempts || 10;
+
+    console.log(`\n  🎯 Попытка получить 200 ответ (макс попыток: ${maxAttempts})`);
+
+    // Подготавливаем headers
+    const headers: any = {
+      'Content-Type': 'application/json'
+    };
+
+    if (this.config.authToken) {
+      headers['Authorization'] = `Bearer ${this.config.authToken}`;
+    }
+
+    const axiosConfig = { headers };
+    const dataVariants: Record<string, any>[] = [];
+
+    // 1. Пробуем получить данные из Happy Path тестов
+    if (this.config.useHappyPathData) {
+      try {
+        console.log(`  📊 Получение данных из Happy Path тестов...`);
+        const happyPathData = await fetchHappyPathData(
+          endpoint,
+          method,
+          {
+            dbConnection: this.dbConnect,
+            dbSchema: this.config.happyPathSchema,
+            samplesCount: maxAttempts
+          }
+        );
+
+        if (happyPathData.length > 0) {
+          const extracted = extractAllFieldsData(happyPathData);
+          dataVariants.push(...extracted);
+          console.log(`  ✓ Получено ${extracted.length} вариантов данных из Happy Path`);
+        } else {
+          console.log(`  ℹ️  Happy Path данные не найдены`);
+        }
+      } catch (error: any) {
+        console.warn(`  ⚠️  Ошибка получения Happy Path данных: ${error.message}`);
+      }
+    }
+
+    // 2. Если Happy Path данных недостаточно, генерируем дополнительные варианты
+    if (dataVariants.length < maxAttempts) {
+      console.log(`  🔄 Генерация дополнительных вариантов данных...`);
+      const additionalVariants = maxAttempts - dataVariants.length;
+
+      for (let i = 0; i < additionalVariants; i++) {
+        const generatedData: Record<string, any> = {};
+        const timestamp = Date.now() + i;
+
+        for (const field of dtoFields) {
+          generatedData[field] = this.generateFallbackValue(field + `_${timestamp}`);
+        }
+
+        dataVariants.push(generatedData);
+      }
+    }
+
+    // 3. Пробуем каждый вариант данных
+    for (let attempt = 0; attempt < Math.min(dataVariants.length, maxAttempts); attempt++) {
+      const testData = dataVariants[attempt];
+
+      if (verbose) {
+        console.log(`\n  📡 Попытка ${attempt + 1}/${maxAttempts}`);
+        console.log(`     URL: ${method} ${url}`);
+        console.log(`     Данные:`, JSON.stringify(testData, null, 2).split('\n').map(l => '        ' + l).join('\n'));
+      } else {
+        console.log(`  📡 Попытка ${attempt + 1}/${maxAttempts}...`);
+      }
+
+      try {
+        let response;
+
+        if (method === 'GET') {
+          response = await axios.get(url, axiosConfig);
+        } else if (method === 'POST') {
+          response = await axios.post(url, testData, axiosConfig);
+        } else if (method === 'PUT') {
+          response = await axios.put(url, testData, axiosConfig);
+        } else if (method === 'PATCH') {
+          response = await axios.patch(url, testData, axiosConfig);
+        } else if (method === 'DELETE') {
+          response = await axios.delete(url, axiosConfig);
+        }
+
+        if (response && response.status >= 200 && response.status < 300) {
+          console.log(`  ✓ Успех! Получен ответ ${response.status}`);
+          return {
+            success: true,
+            data: testData,
+            statusCode: response.status
+          };
+        }
+      } catch (error: any) {
+        const status = error.response?.status;
+
+        if (verbose) {
+          console.log(`     ✗ Ошибка: ${status || 'Network Error'}`);
+          if (error.response?.data) {
+            console.log(`     Ответ:`, JSON.stringify(error.response.data, null, 2).split('\n').map(l => '        ' + l).join('\n'));
+          }
+        } else {
+          console.log(`     ✗ Ошибка: ${status || 'Network Error'}`);
+        }
+
+        // Если 400 (Bad Request), пробуем следующий вариант
+        if (status === 400) {
+          continue;
+        }
+
+        // Для других ошибок (401, 403) останавливаемся
+        if (status === 401 || status === 403) {
+          console.log(`  ❌ Критическая ошибка ${status}, прерываем попытки`);
+          return {
+            success: false,
+            data: null,
+            statusCode: status
+          };
+        }
+      }
+
+      // Небольшая задержка между попытками
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+
+    console.log(`  ❌ Не удалось получить 200 ответ после ${maxAttempts} попыток`);
+    return {
+      success: false,
+      data: null,
+      statusCode: 400
+    };
+  }
+
   /**
    * ЭТАП 3: Подтверждает таблицы реальным вызовом endpoint
    */

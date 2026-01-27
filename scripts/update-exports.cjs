@@ -43,8 +43,8 @@ const excludeItems = [
   'http-client.js',
   'http-client.d.ts',
   'example.js',
-  'example.d.ts',
-  'utils'
+  'example.d.ts'
+  // ИСПРАВЛЕНИЕ: Убрали 'utils' из excludeItems чтобы добавить его в exports
 ];
 
 // Находим все API папки
