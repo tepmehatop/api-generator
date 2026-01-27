@@ -227,25 +227,86 @@ async function findAndLoadAxiosConfig(
       console.log(`🐛 Файл найден: ${foundPath}`);
     }
 
-    try {
-      // Преобразуем абсолютный путь в формат для import
-      const importPath = 'file://' + foundPath;
-      const module = await import(importPath);
+    // Пробуем разные способы загрузки
+    const pathsToTry: string[] = [foundPath];
 
-      if (module[configName]) {
-        if (debug) {
-          console.log(`✓ Конфиг '${configName}' найден в файле: ${foundPath}`);
-        }
-        return module[configName];
-      } else {
-        if (debug) {
-          console.log(`⚠️  Файл найден, но не содержит '${configName}'`);
-          console.log(`   Доступные экспорты:`, Object.keys(module));
-        }
-      }
-    } catch (error: any) {
+    // Если это .ts файл, ищем скомпилированную .js версию
+    if (foundPath.endsWith('.ts')) {
+      const jsPath = foundPath.replace(/\.ts$/, '.js');
+      pathsToTry.push(jsPath);
+
+      // Также пробуем в dist/build папках
+      const dirName = path.dirname(foundPath);
+      const baseName = path.basename(foundPath, '.ts');
+      pathsToTry.push(path.join(dirName, '..', 'dist', baseName + '.js'));
+      pathsToTry.push(path.join(dirName, '..', 'build', baseName + '.js'));
+      pathsToTry.push(path.join(dirName, 'dist', baseName + '.js'));
+    }
+
+    for (const tryPath of pathsToTry) {
+      if (!fs.existsSync(tryPath)) continue;
+
       if (debug) {
-        console.log(`❌ Ошибка загрузки найденного файла: ${error.message}`);
+        console.log(`🐛 Пробую загрузить: ${tryPath}`);
+      }
+
+      try {
+        // Способ 1: Динамический import с file:// протоколом
+        let module: any;
+
+        try {
+          // Правильный формат file:// URL для разных платформ
+          const fileUrl = new URL('file://' + (tryPath.startsWith('/') ? '' : '/') + tryPath.replace(/\\/g, '/')).href;
+          if (debug) {
+            console.log(`🐛   Пробую import с URL: ${fileUrl}`);
+          }
+          module = await import(fileUrl);
+        } catch (importError: any) {
+          if (debug) {
+            console.log(`🐛   Import не сработал: ${importError.message}`);
+          }
+
+          // Способ 2: Используем require (для CommonJS)
+          try {
+            if (debug) {
+              console.log(`🐛   Пробую require: ${tryPath}`);
+            }
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            module = require(tryPath);
+          } catch (requireError: any) {
+            if (debug) {
+              console.log(`🐛   Require не сработал: ${requireError.message}`);
+            }
+            continue;
+          }
+        }
+
+        // Проверяем наличие конфига
+        if (module && module[configName]) {
+          if (debug) {
+            console.log(`✓ Конфиг '${configName}' найден в файле: ${tryPath}`);
+          }
+          return module[configName];
+        } else if (module && module.default && module.default[configName]) {
+          // Проверяем default export
+          if (debug) {
+            console.log(`✓ Конфиг '${configName}' найден в default export файла: ${tryPath}`);
+          }
+          return module.default[configName];
+        } else {
+          if (debug) {
+            const availableKeys = module ? Object.keys(module) : [];
+            console.log(`⚠️  Файл загружен, но не содержит '${configName}'`);
+            console.log(`   Доступные экспорты:`, availableKeys);
+            if (module?.default) {
+              console.log(`   Экспорты в default:`, Object.keys(module.default));
+            }
+          }
+        }
+      } catch (error: any) {
+        if (debug) {
+          console.log(`❌ Ошибка при загрузке ${tryPath}: ${error.message}`);
+        }
       }
     }
   } else {
