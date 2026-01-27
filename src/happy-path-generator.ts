@@ -97,6 +97,166 @@ interface UniqueRequest {
   test_file_path?: string;
 }
 
+/**
+ * НОВОЕ v13.0: Рекурсивный поиск файла в директории
+ */
+function findFileRecursively(
+  dir: string,
+  fileName: string,
+  maxDepth: number = 5,
+  currentDepth: number = 0
+): string | null {
+  if (currentDepth > maxDepth) return null;
+
+  try {
+    const items = fs.readdirSync(dir);
+
+    for (const item of items) {
+      // Пропускаем node_modules, .git и другие служебные папки
+      if (item === 'node_modules' || item === '.git' || item.startsWith('.')) {
+        continue;
+      }
+
+      const fullPath = path.join(dir, item);
+
+      try {
+        const stat = fs.statSync(fullPath);
+
+        if (stat.isFile()) {
+          // Проверяем имя файла (без расширения и с расширениями .ts/.js)
+          const baseName = path.basename(item, path.extname(item));
+          if (baseName === fileName || item === fileName || item === `${fileName}.ts` || item === `${fileName}.js`) {
+            return fullPath;
+          }
+        } else if (stat.isDirectory()) {
+          // Рекурсивно ищем в поддиректориях
+          const found = findFileRecursively(fullPath, fileName, maxDepth, currentDepth + 1);
+          if (found) return found;
+        }
+      } catch (err) {
+        // Пропускаем файлы/папки к которым нет доступа
+        continue;
+      }
+    }
+  } catch (err) {
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * НОВОЕ v13.0: Умный поиск axios конфига с несколькими стратегиями
+ */
+async function findAndLoadAxiosConfig(
+  configPath: string | undefined,
+  configName: string,
+  debug: boolean = false
+): Promise<any | null> {
+  const searchPaths: string[] = [];
+  const cwd = process.cwd();
+
+  if (debug) {
+    console.log(`🐛 Текущая рабочая директория: ${cwd}`);
+    console.log(`🐛 Ищем axios конфиг: ${configName}`);
+  }
+
+  // Стратегия 1: Попробовать указанный путь как есть
+  if (configPath) {
+    searchPaths.push(configPath);
+
+    // Стратегия 2: Попробовать путь относительно cwd
+    const absolutePath = path.isAbsolute(configPath)
+      ? configPath
+      : path.join(cwd, configPath);
+    searchPaths.push(absolutePath);
+
+    // Добавляем варианты с расширениями
+    searchPaths.push(absolutePath + '.ts');
+    searchPaths.push(absolutePath + '.js');
+  }
+
+  // Стратегия 3: Поиск по имени файла
+  const fileNameFromPath = configPath
+    ? path.basename(configPath, path.extname(configPath))
+    : 'axiosHelpers';
+
+  if (debug) {
+    console.log(`🐛 Имя файла для поиска: ${fileNameFromPath}`);
+    console.log(`🐛 Стратегии поиска:`);
+    console.log(`   1. Указанный путь: ${configPath || 'не указан'}`);
+    console.log(`   2. Относительно cwd: ${cwd}`);
+    console.log(`   3. Рекурсивный поиск по имени: ${fileNameFromPath}`);
+  }
+
+  // Пробуем каждый путь
+  for (const searchPath of searchPaths) {
+    if (debug) {
+      console.log(`🐛 Пробую путь: ${searchPath}`);
+    }
+
+    try {
+      const module = await import(searchPath);
+      if (module[configName]) {
+        if (debug) {
+          console.log(`✓ Найден конфиг по пути: ${searchPath}`);
+        }
+        return module[configName];
+      } else {
+        if (debug) {
+          console.log(`   ⚠️  Файл найден, но не содержит '${configName}'`);
+          console.log(`   Доступные экспорты:`, Object.keys(module));
+        }
+      }
+    } catch (error: any) {
+      if (debug && !error.message.includes('Cannot find module')) {
+        console.log(`   ⚠️  Ошибка загрузки: ${error.message}`);
+      }
+    }
+  }
+
+  // Стратегия 4: Рекурсивный поиск файла
+  if (debug) {
+    console.log(`🐛 Начинаю рекурсивный поиск файла '${fileNameFromPath}' в ${cwd}...`);
+  }
+
+  const foundPath = findFileRecursively(cwd, fileNameFromPath);
+
+  if (foundPath) {
+    if (debug) {
+      console.log(`🐛 Файл найден: ${foundPath}`);
+    }
+
+    try {
+      // Преобразуем абсолютный путь в формат для import
+      const importPath = 'file://' + foundPath;
+      const module = await import(importPath);
+
+      if (module[configName]) {
+        if (debug) {
+          console.log(`✓ Конфиг '${configName}' найден в файле: ${foundPath}`);
+        }
+        return module[configName];
+      } else {
+        if (debug) {
+          console.log(`⚠️  Файл найден, но не содержит '${configName}'`);
+          console.log(`   Доступные экспорты:`, Object.keys(module));
+        }
+      }
+    } catch (error: any) {
+      if (debug) {
+        console.log(`❌ Ошибка загрузки найденного файла: ${error.message}`);
+      }
+    }
+  } else {
+    if (debug) {
+      console.log(`⚠️  Файл '${fileNameFromPath}' не найден в проекте`);
+    }
+  }
+
+  return null;
+}
+
 export class HappyPathTestGenerator {
   private sql: any;
   private config: Required<HappyPathTestConfig>;
@@ -184,41 +344,39 @@ export class HappyPathTestGenerator {
     // НОВОЕ v12.0: Валидация данных (проверка актуальности)
     if (this.config.dataValidation.enabled && this.config.dataValidation.validateBeforeGeneration) {
       try {
-        // НОВОЕ v13.0: Динамическая загрузка axios конфига с токеном авторизации
+        // НОВОЕ v13.0: Умная загрузка axios конфига с автопоиском
         let axiosConfigForValidation = axios;
 
-        if (this.config.axiosConfigPath && this.config.axiosConfigName) {
-          if (this.config.debug) {
-            console.log(`🐛 Загружаю axios конфиг из: ${this.config.axiosConfigPath}`);
-          }
+        if (this.config.axiosConfigName) {
+          console.log(`\n🔍 Поиск axios конфига '${this.config.axiosConfigName}'...`);
 
-          try {
-            // Динамический импорт axios конфига
-            const axiosConfigModule = await import(this.config.axiosConfigPath);
-            const loadedAxiosConfig = axiosConfigModule[this.config.axiosConfigName];
+          const loadedAxiosConfig = await findAndLoadAxiosConfig(
+            this.config.axiosConfigPath,
+            this.config.axiosConfigName,
+            this.config.debug
+          );
 
-            if (loadedAxiosConfig) {
-              axiosConfigForValidation = loadedAxiosConfig;
+          if (loadedAxiosConfig) {
+            axiosConfigForValidation = loadedAxiosConfig;
 
-              if (this.config.debug) {
-                console.log(`🐛 Axios конфиг загружен успешно: ${this.config.axiosConfigName}`);
-                console.log(`🐛 Конфиг содержит:`, {
-                  hasHeaders: !!loadedAxiosConfig.defaults?.headers,
-                  hasAuth: !!loadedAxiosConfig.defaults?.headers?.Authorization,
-                  baseURL: loadedAxiosConfig.defaults?.baseURL
-                });
-              }
-            } else {
-              console.warn(`⚠️  Не найден axios конфиг с именем: ${this.config.axiosConfigName}`);
-              if (this.config.debug) {
-                console.log(`🐛 Доступные конфиги:`, Object.keys(axiosConfigModule));
-              }
-            }
-          } catch (error: any) {
-            console.error(`❌ Ошибка при загрузке axios конфига:`, error.message);
+            console.log(`✓ Axios конфиг '${this.config.axiosConfigName}' загружен успешно`);
+
             if (this.config.debug) {
-              console.error(`🐛 Полная ошибка:`, error);
+              console.log(`🐛 Конфиг содержит:`, {
+                hasHeaders: !!loadedAxiosConfig.defaults?.headers,
+                hasAuth: !!loadedAxiosConfig.defaults?.headers?.Authorization,
+                hasCommonHeaders: !!loadedAxiosConfig.defaults?.headers?.common,
+                baseURL: loadedAxiosConfig.defaults?.baseURL
+              });
+
+              // Показываем все заголовки в debug режиме
+              if (loadedAxiosConfig.defaults?.headers) {
+                console.log(`🐛 Все заголовки:`, JSON.stringify(loadedAxiosConfig.defaults.headers, null, 2));
+              }
             }
+          } else {
+            console.warn(`⚠️  Не удалось найти axios конфиг '${this.config.axiosConfigName}'`);
+            console.warn(`⚠️  Продолжаю без авторизации (могут быть 401 ошибки)`);
           }
         }
 
