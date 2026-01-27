@@ -1,20 +1,23 @@
 /**
- * Генератор Happy Path API тестов на основе реальных данных с фронта
+ * Генератор Happy Path API тестов
+ * ВЕРСИЯ 12.0 - ДЕДУПЛИКАЦИЯ И ВАЛИДАЦИЯ ДАННЫХ
  *
- * ВЕРСИЯ 10.0 - ВСЕ 12 ПУНКТОВ ИСПРАВЛЕНИЙ
- *
- * 1. ✅ Полный архив проекта
- * 2. ✅ Файлы с префиксом .test.ts (не .spec.ts)
- * 3. ✅ Структура теста СТРОГО как в примере findPetsByStatus.test.ts
- * 4. ✅ Использование только axios (без request от Playwright)
- * 5. ✅ Нормализация данных из БД
- * 6. ✅ Глубокое сравнение объектов
- * 7. ✅ Конфигурируемая глобальная переменная стенда
- * 8. ✅ Конфигурируемый axios config с импортом
- * 9. ✅ Валидация структуры и типов данных
- * 10. ✅ Проверка обязательных полей из DTO
- * 11. ✅ Вынос данных в отдельные файлы
- * 12. ✅ Объединение дублирующих тестов
+ * ИСПРАВЛЕНИЯ:
+ * 1. Конфигурируемый импорт test/expect (testImportPath)
+ * 2. В apiErrorCodes только 200-ые коды
+ * 3. Описание теста с рандомным номером
+ * 4. Запросы через catch с детальным выводом
+ * 5. Применены deepCompareObjects, generateTypeValidationCode, findDtoForEndpoint
+ * 6. generateTypeValidationCode на основе DTO
+ * 7. normalizeDbDataByDto на основе типов из DTO
+ * 8. Исправлен mergeDuplicateTests (нормализация endpoint)
+ * 9. createSeparateDataFiles - нормализация во внешнем файле
+ * 10. Импорт DTO в тест
+ * 11. Динамический импорт compareDbWithResponse из NPM пакета (packageName)
+ * 12. Реальный endpoint с подставленными ID вместо {id}
+ * 13. Улучшенный вывод различий с цветами (блочный формат)
+ * 14. НОВОЕ: Дедупликация тестов (Идея 1 + 2)
+ * 15. НОВОЕ: Валидация данных (Стратегия 1 - проверка актуальности)
  */
 export interface HappyPathTestConfig {
     outputDir: string;
@@ -32,6 +35,28 @@ export interface HappyPathTestConfig {
     apiGeneratedPath?: string;
     createSeparateDataFiles?: boolean;
     mergeDuplicateTests?: boolean;
+    testImportPath?: string;
+    packageName?: string;
+    deduplication?: {
+        enabled?: boolean;
+        ignoreFields?: string[];
+        significantFields?: string[];
+        detectEdgeCases?: boolean;
+        maxTestsPerEndpoint?: number;
+        preserveTaggedTests?: string[];
+    };
+    dataValidation?: {
+        enabled?: boolean;
+        validateBeforeGeneration?: boolean;
+        onStaleData?: 'update' | 'skip' | 'delete';
+        staleIfChanged?: string[];
+        allowChanges?: string[];
+        validateInDatabase?: boolean;
+        standUrl?: string;
+        axiosConfig?: any;
+        logChanges?: boolean;
+        logPath?: string;
+    };
 }
 export declare class HappyPathTestGenerator {
     private sql;
@@ -39,13 +64,9 @@ export declare class HappyPathTestGenerator {
     constructor(config: HappyPathTestConfig, sqlConnection: any);
     generate(): Promise<void>;
     /**
-     * Пункт 12: Группировка по структуре запроса (объединение дублей)
+     * ИСПРАВЛЕНИЕ 8: Правильная группировка - заменяем числа на {id}
      */
     private groupByStructure;
-    /**
-     * Создает хэш структуры request (игнорируя ID)
-     */
-    private getStructureHash;
     private groupByEndpoint;
     private fetchUniqueRequests;
     private generateTestsForEndpoint;
@@ -56,21 +77,16 @@ export declare class HappyPathTestGenerator {
      */
     private generateTestFile;
     /**
-     * Пункт 11: Создает отдельные файлы с данными
+     * ИСПРАВЛЕНИЕ 9: Создает файлы с НОРМАЛИЗОВАННЫМИ данными на основе DTO
      */
     private createDataFiles;
     /**
-     * Генерирует один тест со ВСЕМИ исправлениями
-     * Пункт 3: Структура СТРОГО как в примере findPetsByStatus.test.ts
-     * Пункт 4: Только axios
-     * Пункт 5 и 6: Нормализация и глубокое сравнение
-     * Пункт 7: Конфигурируемая переменная стенда
-     * Пункт 8: Конфигурируемый axios config
-     * Пункт 9: Валидация типов
-     * Пункт 10: Проверка DTO
+     * ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ метод генерации теста
+     * ИСПРАВЛЕНИЯ 4, 5, 6, 7
      */
     private generateSingleTest;
-    private extractQueryParams;
+    private getJsType;
+    private getRelativePath;
     private endpointToFileName;
     private getSuccessCodeName;
     private markAsGenerated;

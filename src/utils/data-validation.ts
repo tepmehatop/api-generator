@@ -12,16 +12,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export interface ValidationConfig {
-  enabled: boolean;
-  validateBeforeGeneration: boolean;
-  onStaleData: 'update' | 'skip' | 'delete';
-  staleIfChanged: string[];
-  allowChanges: string[];
-  validateInDatabase: boolean;
+  enabled?: boolean;
+  validateBeforeGeneration?: boolean;
+  onStaleData?: 'update' | 'skip' | 'delete';
+  staleIfChanged?: string[];
+  allowChanges?: string[];
+  validateInDatabase?: boolean;
   standUrl?: string;
   axiosConfig?: any;
-  logChanges: boolean;
-  logPath: string;
+  logChanges?: boolean;
+  logPath?: string;
 }
 
 export interface TestRequest {
@@ -65,7 +65,11 @@ function matchesPattern(fieldName: string, pattern: string): boolean {
  * Проверяет является ли изменение поля "допустимым"
  * Допустимые изменения: timestamps, даты
  */
-function isAllowedChange(fieldPath: string, allowPatterns: string[]): boolean {
+function isAllowedChange(fieldPath: string, allowPatterns?: string[]): boolean {
+  if (!allowPatterns || allowPatterns.length === 0) {
+    return false;
+  }
+
   const fieldName = fieldPath.split('.').pop() || fieldPath;
 
   for (const pattern of allowPatterns) {
@@ -81,7 +85,11 @@ function isAllowedChange(fieldPath: string, allowPatterns: string[]): boolean {
  * Проверяет является ли изменение поля "значимым"
  * Значимые изменения: status, state, type, role
  */
-function isSignificantChange(fieldPath: string, stalePatterns: string[]): boolean {
+function isSignificantChange(fieldPath: string, stalePatterns?: string[]): boolean {
+  if (!stalePatterns || stalePatterns.length === 0) {
+    return false;
+  }
+
   const fieldName = fieldPath.split('.').pop() || fieldPath;
 
   for (const pattern of stalePatterns) {

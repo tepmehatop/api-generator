@@ -61,6 +61,21 @@ export interface DatabaseAnalyzerConfig {
         stage2?: boolean;
         stage3?: boolean;
     };
+    /**
+     * НОВОЕ v13.0: Использовать данные из Happy Path тестов
+     * @default true
+     */
+    useHappyPathData?: boolean;
+    /**
+     * НОВОЕ v13.0: Схема БД для Happy Path данных
+     * @default 'qa'
+     */
+    happyPathSchema?: string;
+    /**
+     * НОВОЕ v13.0: Количество попыток подбора данных для получения 200 ответа
+     * @default 10
+     */
+    maxAttempts?: number;
 }
 /**
  * Результат анализа
@@ -108,6 +123,11 @@ export declare class DatabaseAnalyzer {
      * ЭТАП 2: Находит связанные таблицы через FK
      */
     private findRelatedTables;
+    /**
+     * НОВОЕ v13.0: Пытается получить 200 ответ с множественными попытками
+     * Использует данные из Happy Path тестов и существующие данные из БД
+     */
+    private tryGetSuccessfulResponse;
     /**
      * ЭТАП 3: Подтверждает таблицы реальным вызовом endpoint
      */

@@ -1,5 +1,6 @@
 /**
  * Генератор API тестов из сгенерированных API методов
+ * ВЕРСИЯ 13.0 - ИНТЕГРАЦИЯ С HAPPY PATH ДАННЫМИ
  */
 export interface ApiTestConfig {
     /**
@@ -37,6 +38,41 @@ export interface ApiTestConfig {
      * @default false
      */
     generatePairwiseTests?: boolean;
+    /**
+     * НОВОЕ v13.0: Использовать данные из Happy Path тестов
+     * @default true
+     */
+    useHappyPathData?: boolean;
+    /**
+     * НОВОЕ v13.0: Функция подключения к БД (sql tagged template)
+     * Необходимо для получения данных из Happy Path тестов
+     */
+    dbConnection?: any;
+    /**
+     * НОВОЕ v13.0: Схема БД для Happy Path данных
+     * @default 'qa'
+     */
+    dbSchema?: string;
+    /**
+     * НОВОЕ v13.0: Количество записей Happy Path для выборки
+     * @default 15
+     */
+    happyPathSamplesCount?: number;
+    /**
+     * НОВОЕ v13.0: Количество попыток подбора данных для получения 200 ответа
+     * @default 10
+     */
+    maxDataGenerationAttempts?: number;
+    /**
+     * НОВОЕ v13.0: URL стенда для тестового вызова при генерации данных
+     * @default process.env.StandURL
+     */
+    standUrl?: string;
+    /**
+     * НОВОЕ v13.0: Токен авторизации для тестового вызова
+     * @default process.env.AUTH_TOKEN
+     */
+    authToken?: string;
 }
 /**
  * Генерирует API тесты из файла с методами

@@ -1,6 +1,7 @@
 "use strict";
 /**
  * Генератор API тестов из сгенерированных API методов
+ * ВЕРСИЯ 13.0 - ИНТЕГРАЦИЯ С HAPPY PATH ДАННЫМИ
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -39,6 +40,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateApiTests = generateApiTests;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const happy_path_data_fetcher_1 = require("./utils/happy-path-data-fetcher");
 /**
  * Генерирует API тесты из файла с методами
  */
@@ -50,6 +52,12 @@ async function generateApiTests(config) {
         baseTestPath: '../../../fixtures/baseTest',
         axiosHelpersPath: '../../../helpers/axiosHelpers',
         apiTestHelperPath: '../../../helpers/apiTestHelper',
+        useHappyPathData: true,
+        dbSchema: 'qa',
+        happyPathSamplesCount: 15,
+        maxDataGenerationAttempts: 10,
+        standUrl: process.env.StandURL,
+        authToken: process.env.AUTH_TOKEN,
         ...config
     };
     console.log('🧪 Начинаю генерацию API тестов...');
@@ -91,7 +99,7 @@ async function generateApiTests(config) {
             // Извлекаем protected области
             const protectedAreas = extractProtectedAreas(existingContent);
             // Генерируем новое содержимое
-            const newContent = generateTestForMethod(method, fullConfig);
+            const newContent = await generateTestForMethod(method, fullConfig);
             // Восстанавливаем protected области
             const finalContent = restoreProtectedAreas(newContent, protectedAreas);
             fs.writeFileSync(testFilePath, finalContent);
@@ -100,7 +108,7 @@ async function generateApiTests(config) {
         }
         else {
             // Новый файл
-            const testContent = generateTestForMethod(method, fullConfig);
+            const testContent = await generateTestForMethod(method, fullConfig);
             fs.writeFileSync(testFilePath, testContent);
             console.log(`  ✅ ${testFileName} (создан)`);
             generatedCount++;
@@ -296,16 +304,82 @@ function generateTestFileName(method) {
     return `${method.name}.test.ts`;
 }
 /**
+ * НОВОЕ v13.0: Создает файл с данными из Happy Path
+ */
+function createHappyPathDataFile(methodName, happyPathData, outputDir) {
+    const testDataDir = path.join(outputDir, 'testData');
+    // Создаем папку testData если её нет
+    if (!fs.existsSync(testDataDir)) {
+        fs.mkdirSync(testDataDir, { recursive: true });
+    }
+    const dataFileName = `${methodName}.data.ts`;
+    const dataFilePath = path.join(testDataDir, dataFileName);
+    // Генерируем содержимое файла
+    const lines = [];
+    lines.push('/**');
+    lines.push(` * Тестовые данные для ${methodName}`);
+    lines.push(' * Из Happy Path тестов (qa.api_requests)');
+    lines.push(' * @generated');
+    lines.push(' */');
+    lines.push('');
+    // Экспортируем данные
+    lines.push('export const dbTestData = {');
+    lines.push('  happyPath: [');
+    happyPathData.forEach((data, index) => {
+        const requestBody = data.request_body || {};
+        const rowStr = JSON.stringify(requestBody, null, 4);
+        const comma = index < happyPathData.length - 1 ? ',' : '';
+        lines.push(`    ${rowStr}${comma}`);
+    });
+    lines.push('  ]');
+    lines.push('} as const;');
+    lines.push('');
+    // Экспортируем вспомогательные функции
+    lines.push('// Получить все данные');
+    lines.push('export const getHappyPathData = () => dbTestData.happyPath;');
+    lines.push('');
+    lines.push('// Получить случайную запись');
+    lines.push('export const getRandomHappyPath = () => {');
+    lines.push('  const data = dbTestData.happyPath;');
+    lines.push('  return data[Math.floor(Math.random() * data.length)];');
+    lines.push('};');
+    lines.push('');
+    // Записываем файл
+    fs.writeFileSync(dataFilePath, lines.join('\n'));
+    console.log(`  ✓ Создан файл с Happy Path данными: ${path.relative(process.cwd(), dataFilePath)}`);
+    // Возвращаем относительный путь для импорта
+    return `./testData/${dataFileName.replace('.ts', '')}`;
+}
+/**
  * Генерирует содержимое теста для метода
  */
-function generateTestForMethod(method, config) {
+async function generateTestForMethod(method, config) {
     const lines = [];
+    // НОВОЕ v13.0: Получаем данные из Happy Path тестов
+    let happyPathData = [];
+    if (config.useHappyPathData && config.dbConnection) {
+        console.log(`\n  📊 Получение Happy Path данных для ${method.name}...`);
+        try {
+            happyPathData = await (0, happy_path_data_fetcher_1.fetchHappyPathData)(method.path, method.httpMethod, {
+                dbConnection: config.dbConnection,
+                dbSchema: config.dbSchema,
+                samplesCount: config.happyPathSamplesCount
+            });
+        }
+        catch (error) {
+            console.warn(`  ⚠️  Ошибка получения Happy Path данных: ${error.message}`);
+        }
+    }
+    // НОВОЕ v13.0: Создаем файл с данными если есть Happy Path данные
+    if (happyPathData.length > 0) {
+        createHappyPathDataFile(method.name, happyPathData, config.outputDir);
+    }
     // Проверяем наличие файла с данными
     const testFileName = method.name + '.test.ts';
     const testDataDir = path.join(config.outputDir, 'testData');
     const testDataFileName = method.name + '.data.ts';
     const testDataFilePath = path.join(testDataDir, testDataFileName);
-    const hasTestData = fs.existsSync(testDataFilePath);
+    const hasTestData = fs.existsSync(testDataFilePath) || happyPathData.length > 0;
     // Импорты
     lines.push(`import test, { expect } from '${config.baseTestPath}';`);
     lines.push("import axios from 'axios';");
@@ -365,7 +439,6 @@ function generateTestForMethod(method, config) {
     lines.push('  forbidden: 403,');
     lines.push('  notFound: 404,');
     lines.push('  methodNotAllowed: 405,');
-    lines.push('  unsupportedMediaType: 415,');
     lines.push('};');
     lines.push('');
     lines.push('const unauthorized = apiErrorCodes.unauthorized;');
@@ -373,7 +446,6 @@ function generateTestForMethod(method, config) {
     lines.push('const forbidden = apiErrorCodes.forbidden;');
     lines.push('const notFound = apiErrorCodes.notFound;');
     lines.push('const methodNotAllowed = apiErrorCodes.methodNotAllowed;');
-    lines.push('const unsupportedMediaType = apiErrorCodes.unsupportedMediaType;');
     lines.push(`const success = ${getSuccessCode(method)};`);
     lines.push('');
     // Case Info
@@ -396,7 +468,6 @@ function generateTestForMethod(method, config) {
     if (method.hasAuth) {
         lines.push(' * - С токеном пользователя без прав (403)');
     }
-    lines.push(' * - С неверными заголовками Content-Type (415)');
     if (hasIdParams) {
         lines.push(' * - С несуществующим ID (404)');
     }
@@ -458,24 +529,7 @@ function generateTestForMethod(method, config) {
             lines.push('  });');
             lines.push('');
         }
-        // Тест 7: С неверным Content-Type (415)
-        if (hasBodyParam(method)) {
-            lines.push(`  test(\`\${httpMethod} с неверным Content-Type (\${unsupportedMediaType}) @api\`, async ({ page }, testInfo) => {`);
-            lines.push('    const wrongHeaders = {');
-            lines.push('      headers: {');
-            lines.push("        'Authorization': `Bearer ${process.env.AUTH_TOKEN}`,");
-            lines.push("        'Content-Type': 'application/xml',");
-            lines.push('      }');
-            lines.push('    };');
-            const axiosCallWrongType = generateSimpleAxiosCall(method, true, false, 'wrongHeaders');
-            lines.push(`    await ${axiosCallWrongType}.catch(async function(error) {`);
-            lines.push('      await expect(error.response.status).toBe(unsupportedMediaType);');
-            lines.push('      await expect(error.response.statusText).toContain("Unsupported Media Type");');
-            lines.push('    });');
-            lines.push('  });');
-            lines.push('');
-        }
-        // Тест 8: 404 для несуществующего ресурса
+        // Тест 7: 404 для несуществующего ресурса
         if (hasIdParams) {
             lines.push(`  test(\`\${httpMethod} с несуществующим ID (\${notFound}) @api\`, async ({ page }, testInfo) => {`);
             // Переопределяем ID на несуществующий

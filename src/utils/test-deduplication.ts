@@ -8,12 +8,12 @@
  */
 
 export interface DeduplicationConfig {
-  enabled: boolean;
-  ignoreFields: string[];
-  significantFields: string[];
-  detectEdgeCases: boolean;
-  maxTestsPerEndpoint: number;
-  preserveTaggedTests: string[];
+  enabled?: boolean;
+  ignoreFields?: string[];
+  significantFields?: string[];
+  detectEdgeCases?: boolean;
+  maxTestsPerEndpoint?: number;
+  preserveTaggedTests?: string[];
 }
 
 export interface TestRequest {
@@ -47,7 +47,11 @@ function matchesPattern(fieldName: string, pattern: string): boolean {
 /**
  * Проверяет должно ли поле игнорироваться при сравнении
  */
-function shouldIgnoreField(fieldPath: string, ignorePatterns: string[]): boolean {
+function shouldIgnoreField(fieldPath: string, ignorePatterns?: string[]): boolean {
+  if (!ignorePatterns || ignorePatterns.length === 0) {
+    return false;
+  }
+
   const fieldName = fieldPath.split('.').pop() || fieldPath;
 
   for (const pattern of ignorePatterns) {
@@ -62,7 +66,11 @@ function shouldIgnoreField(fieldPath: string, ignorePatterns: string[]): boolean
 /**
  * Проверяет является ли поле "значимым" (важным для бизнес-логики)
  */
-function isSignificantField(fieldPath: string, significantFields: string[]): boolean {
+function isSignificantField(fieldPath: string, significantFields?: string[]): boolean {
+  if (!significantFields || significantFields.length === 0) {
+    return false;
+  }
+
   const fieldName = fieldPath.split('.').pop() || fieldPath;
 
   for (const pattern of significantFields) {
@@ -320,16 +328,17 @@ export function selectBestTests(
   requests: TestRequest[],
   config: DeduplicationConfig
 ): TestRequest[] {
-  if (requests.length <= config.maxTestsPerEndpoint) {
+  const maxTests = config.maxTestsPerEndpoint || 10;
+
+  if (requests.length <= maxTests) {
     return requests;
   }
 
   const selected: TestRequest[] = [];
-  const maxTests = config.maxTestsPerEndpoint;
 
   // 1. Проверяем защищенные тесты (с тегами [KEEP], [IMPORTANT])
   const protectedTests = requests.filter(r => {
-    return config.preserveTaggedTests.some(tag => r.test_name.includes(tag));
+    return (config.preserveTaggedTests || []).some(tag => r.test_name.includes(tag));
   });
 
   for (const protectedTest of protectedTests) {
@@ -356,7 +365,7 @@ export function selectBestTests(
   }
 
   // 4. Добавляем тесты с редкими значениями
-  if (selected.length < maxTests) {
+  if (selected.length < maxTests && config.significantFields) {
     const rareTests = detectRareValues(requests, config.significantFields);
     for (const rareTest of rareTests) {
       if (selected.includes(rareTest)) continue;
@@ -387,7 +396,9 @@ export function deduplicateTests(
   requests: TestRequest[],
   config: DeduplicationConfig
 ): TestRequest[] {
-  if (!config.enabled || requests.length <= config.maxTestsPerEndpoint) {
+  const maxTests = config.maxTestsPerEndpoint || 10;
+
+  if (!config.enabled || requests.length <= maxTests) {
     return requests;
   }
 
