@@ -406,7 +406,7 @@ export class HappyPathTestGenerator {
     if (this.config.dataValidation.enabled && this.config.dataValidation.validateBeforeGeneration) {
       try {
         // НОВОЕ v13.0: Умная загрузка axios конфига с автопоиском
-        let axiosConfigForValidation = axios;
+        let axiosConfigObject: any = undefined;
 
         if (this.config.axiosConfigName) {
           console.log(`\n🔍 Поиск axios конфига '${this.config.axiosConfigName}'...`);
@@ -418,22 +418,40 @@ export class HappyPathTestGenerator {
           );
 
           if (loadedAxiosConfig) {
-            axiosConfigForValidation = loadedAxiosConfig;
-
             console.log(`✓ Axios конфиг '${this.config.axiosConfigName}' загружен успешно`);
 
-            if (this.config.debug) {
-              console.log(`🐛 Конфиг содержит:`, {
-                hasHeaders: !!loadedAxiosConfig.defaults?.headers,
-                hasAuth: !!loadedAxiosConfig.defaults?.headers?.Authorization,
-                hasCommonHeaders: !!loadedAxiosConfig.defaults?.headers?.common,
-                baseURL: loadedAxiosConfig.defaults?.baseURL
-              });
+            // Проверяем: это axios instance или просто объект конфигурации?
+            const isAxiosInstance = typeof loadedAxiosConfig?.get === 'function';
 
-              // Показываем все заголовки в debug режиме
-              if (loadedAxiosConfig.defaults?.headers) {
-                console.log(`🐛 Все заголовки:`, JSON.stringify(loadedAxiosConfig.defaults.headers, null, 2));
+            if (isAxiosInstance) {
+              // Это axios instance - извлекаем конфиг
+              axiosConfigObject = loadedAxiosConfig.defaults;
+
+              if (this.config.debug) {
+                console.log(`🐛 Загружен axios instance`);
+                console.log(`🐛 Конфиг содержит:`, {
+                  hasHeaders: !!axiosConfigObject?.headers,
+                  hasAuth: !!axiosConfigObject?.headers?.Authorization,
+                  baseURL: axiosConfigObject?.baseURL
+                });
               }
+            } else {
+              // Это просто объект конфигурации
+              axiosConfigObject = loadedAxiosConfig;
+
+              if (this.config.debug) {
+                console.log(`🐛 Загружен объект конфигурации`);
+                console.log(`🐛 Конфиг содержит:`, {
+                  hasHeaders: !!axiosConfigObject?.headers,
+                  hasAuth: !!axiosConfigObject?.headers?.authorization || !!axiosConfigObject?.headers?.Authorization,
+                  hasHttpsAgent: !!axiosConfigObject?.httpsAgent
+                });
+              }
+            }
+
+            // Показываем все заголовки в debug режиме
+            if (this.config.debug && axiosConfigObject?.headers) {
+              console.log(`🐛 Все заголовки:`, JSON.stringify(axiosConfigObject.headers, null, 2));
             }
           } else {
             console.warn(`⚠️  Не удалось найти axios конфиг '${this.config.axiosConfigName}'`);
@@ -457,7 +475,7 @@ export class HappyPathTestGenerator {
         const validationConfig = {
           ...this.config.dataValidation,
           standUrl: standUrl || this.config.dataValidation.standUrl,
-          axiosConfig: axiosConfigForValidation.defaults
+          axiosConfig: axiosConfigObject
         };
 
         if (this.config.debug) {
@@ -466,14 +484,15 @@ export class HappyPathTestGenerator {
             validateBeforeGeneration: validationConfig.validateBeforeGeneration,
             standUrl: validationConfig.standUrl,
             hasAxiosConfig: !!validationConfig.axiosConfig,
-            hasAuthHeader: !!validationConfig.axiosConfig?.headers?.Authorization
+            hasAuthHeader: !!validationConfig.axiosConfig?.headers?.authorization || !!validationConfig.axiosConfig?.headers?.Authorization
           });
         }
 
+        // ВАЖНО: Передаем настоящий axios, а конфиг - отдельно в validationConfig
         const validationResult = await validateRequests(
           uniqueRequests,
           validationConfig,
-          axiosConfigForValidation
+          axios  // ← Настоящий axios, не конфиг!
         );
 
         uniqueRequests = validationResult.validRequests;
