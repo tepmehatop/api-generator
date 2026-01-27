@@ -80,6 +80,9 @@ export interface HappyPathTestConfig {
     logChanges?: boolean; // Логировать изменения данных
     logPath?: string; // Путь для логов
   };
+
+  // НОВОЕ v13.0: Debug режим
+  debug?: boolean; // Детальное логирование для отладки (default: false)
 }
 
 interface UniqueRequest {
@@ -127,6 +130,7 @@ export class HappyPathTestGenerator {
       mergeDuplicateTests: true,
       testImportPath: '@playwright/test', // ИСПРАВЛЕНИЕ 1
       packageName: defaultPackageName, // ИСПРАВЛЕНИЕ 11: Автоматически из package.json
+      debug: false, // НОВОЕ v13.0: Debug режим по умолчанию выключен
       ...config,
 
       // НОВОЕ v12.0: Дефолтные настройки дедупликации
@@ -163,16 +167,94 @@ export class HappyPathTestGenerator {
     console.log('🔍 Подключаюсь к БД и собираю данные...');
     console.log(this.config.force ? '⚠️  FORCE режим' : 'ℹ️  Инкрементальный режим');
 
+    if (this.config.debug) {
+      console.log('🐛 DEBUG MODE: Включен детальный вывод');
+      console.log('🐛 Конфигурация:', JSON.stringify({
+        standUrlEnvVar: this.config.standUrlEnvVar,
+        standUrl: process.env[this.config.standUrlEnvVar],
+        axiosConfigName: this.config.axiosConfigName,
+        axiosConfigPath: this.config.axiosConfigPath,
+        dbSchema: this.config.dbSchema
+      }, null, 2));
+    }
+
     let uniqueRequests = await this.fetchUniqueRequests();
     console.log(`📊 Найдено ${uniqueRequests.length} уникальных запросов`);
 
     // НОВОЕ v12.0: Валидация данных (проверка актуальности)
     if (this.config.dataValidation.enabled && this.config.dataValidation.validateBeforeGeneration) {
       try {
+        // НОВОЕ v13.0: Динамическая загрузка axios конфига с токеном авторизации
+        let axiosConfigForValidation = axios;
+
+        if (this.config.axiosConfigPath && this.config.axiosConfigName) {
+          if (this.config.debug) {
+            console.log(`🐛 Загружаю axios конфиг из: ${this.config.axiosConfigPath}`);
+          }
+
+          try {
+            // Динамический импорт axios конфига
+            const axiosConfigModule = await import(this.config.axiosConfigPath);
+            const loadedAxiosConfig = axiosConfigModule[this.config.axiosConfigName];
+
+            if (loadedAxiosConfig) {
+              axiosConfigForValidation = loadedAxiosConfig;
+
+              if (this.config.debug) {
+                console.log(`🐛 Axios конфиг загружен успешно: ${this.config.axiosConfigName}`);
+                console.log(`🐛 Конфиг содержит:`, {
+                  hasHeaders: !!loadedAxiosConfig.defaults?.headers,
+                  hasAuth: !!loadedAxiosConfig.defaults?.headers?.Authorization,
+                  baseURL: loadedAxiosConfig.defaults?.baseURL
+                });
+              }
+            } else {
+              console.warn(`⚠️  Не найден axios конфиг с именем: ${this.config.axiosConfigName}`);
+              if (this.config.debug) {
+                console.log(`🐛 Доступные конфиги:`, Object.keys(axiosConfigModule));
+              }
+            }
+          } catch (error: any) {
+            console.error(`❌ Ошибка при загрузке axios конфига:`, error.message);
+            if (this.config.debug) {
+              console.error(`🐛 Полная ошибка:`, error);
+            }
+          }
+        }
+
+        // Получаем URL стенда из переменной окружения
+        const standUrl = process.env[this.config.standUrlEnvVar];
+
+        if (!standUrl) {
+          console.warn(`⚠️  Переменная окружения ${this.config.standUrlEnvVar} не установлена`);
+          if (this.config.debug) {
+            console.log(`🐛 Доступные env переменные:`, Object.keys(process.env).filter(k => k.includes('URL')));
+          }
+        } else if (this.config.debug) {
+          console.log(`🐛 Stand URL: ${standUrl}`);
+        }
+
+        // Обновляем конфиг валидации с правильными настройками
+        const validationConfig = {
+          ...this.config.dataValidation,
+          standUrl: standUrl || this.config.dataValidation.standUrl,
+          axiosConfig: axiosConfigForValidation.defaults
+        };
+
+        if (this.config.debug) {
+          console.log(`🐛 Конфиг валидации:`, {
+            enabled: validationConfig.enabled,
+            validateBeforeGeneration: validationConfig.validateBeforeGeneration,
+            standUrl: validationConfig.standUrl,
+            hasAxiosConfig: !!validationConfig.axiosConfig,
+            hasAuthHeader: !!validationConfig.axiosConfig?.headers?.Authorization
+          });
+        }
+
         const validationResult = await validateRequests(
           uniqueRequests,
-          this.config.dataValidation,
-          axios
+          validationConfig,
+          axiosConfigForValidation
         );
 
         uniqueRequests = validationResult.validRequests;
@@ -188,8 +270,11 @@ export class HappyPathTestGenerator {
         if (validationResult.skippedCount > 0) {
           console.log(`   Пропущено: ${validationResult.skippedCount}`);
         }
-      } catch (error) {
-        console.error('❌ Ошибка при валидации данных:', error);
+      } catch (error: any) {
+        console.error('❌ Ошибка при валидации данных:', error.message);
+        if (this.config.debug) {
+          console.error('🐛 Полная ошибка:', error);
+        }
         console.log('⚠️  Продолжаю без валидации');
       }
     }
