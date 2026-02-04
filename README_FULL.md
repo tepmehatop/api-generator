@@ -25,7 +25,29 @@
 
 ## История версий
 
-### v13.0 (Текущая) - Happy Path интеграция в generateApiTests
+### v14.0 (Текущая) - Раздельные методы генерации тестов
+
+**Основные изменения:**
+
+1. **Раздельные методы генерации**: `generateApiTests()` разделен на три отдельных метода:
+   - `generateNegativeTests()` - только негативные тесты (401, 403, 400, 404, 405)
+   - `generatePositiveTests()` - только позитивные тесты (200, 201)
+   - `generatePairwiseTests()` - только pairwise комбинации
+2. **Поддержка папок**: `apiFilePath` теперь может быть как файлом, так и папкой с файлами
+3. **Автогруппировка**: Тесты автоматически группируются по категориям (orders, users и т.д.)
+4. **Интеграция apiTestHelper**: `apiTestHelper` теперь правильно используется в негативных тестах при падении
+5. **Детальный отчет**: Отчет теперь включает "Не удалось сгенерировать" с причинами
+
+**Новые интерфейсы:**
+- `BaseTestConfig` - базовый конфиг для всех типов тестов
+- `NegativeTestConfig` - конфиг для негативных тестов
+- `PositiveTestConfig` - конфиг для позитивных тестов
+- `PairwiseTestConfig` - конфиг для pairwise тестов
+
+**Измененные файлы:**
+- `src/test-generator.ts` → v14.0
+
+### v13.0 - Happy Path интеграция в generateApiTests
 
 **Основные изменения:**
 
@@ -101,6 +123,42 @@ npm install @your-company/api-codegen
 
 ## Методы API
 
+### 1. generateApi()
+
+Генерация TypeScript API клиента из OpenAPI
+
+### 2. generateNegativeTests() ⭐ NEW v14.0
+
+Генерация ТОЛЬКО негативных тестов (401, 403, 400, 404, 405)
+
+### 3. generatePositiveTests() ⭐ NEW v14.0
+
+Генерация ТОЛЬКО позитивных тестов (200, 201)
+
+### 4. generatePairwiseTests() ⭐ NEW v14.0
+
+Генерация ТОЛЬКО pairwise комбинаций
+
+### 5. generateApiTests() 🚫 DEPRECATED
+
+Используйте раздельные методы выше
+
+### 6. generateHappyPathTests()
+
+Генерация Happy Path тестов из БД
+
+### 7. analyzeAndGenerateTestData()
+
+Анализ БД и генерация тестовых данных
+
+### 8. collectApiData()
+
+Сбор данных из UI тестов в БД
+
+---
+
+## Детали методов
+
 ### generateApi()
 
 Генерирует TypeScript API клиент из OpenAPI спецификации.
@@ -167,7 +225,312 @@ await generateApi({
 
 ---
 
-### generateApiTests()
+### generateNegativeTests() ⭐ NEW v14.0
+
+Генерирует **ТОЛЬКО негативные** Playwright тесты для API методов.
+
+**Преимущества раздельного метода:**
+- Гибкая настройка каждого типа тестов (401, 403, 400, 404, 405)
+- Поддержка папок с файлами
+- Автоматическая группировка по категориям
+- Правильная интеграция `apiTestHelper` при падении тестов
+- Детальный отчет с причинами неудач
+
+#### Интерфейс
+
+```typescript
+interface NegativeTestConfig {
+  // === ОБЯЗАТЕЛЬНЫЕ ===
+  apiFilePath: string;                   // Путь к файлу ИЛИ папке с API методами ⭐ NEW
+  outputDir: string;                     // Папка для тестов
+
+  // === НАСТРОЙКА НЕГАТИВНЫХ ТЕСТОВ ===
+  generate401Tests?: boolean;            // 401 Unauthorized (default: true)
+  generate403Tests?: boolean;            // 403 Forbidden (default: true)
+  generate400Tests?: boolean;            // 400 Bad Request (default: true)
+  generate404Tests?: boolean;            // 404 Not Found (default: true)
+  generate405Tests?: boolean;            // 405 Method Not Allowed (default: true)
+
+  // === ГРУППИРОВКА ⭐ NEW ===
+  groupByCategory?: boolean;             // Группировать по категориям (default: true)
+                                         // orders → outputDir/orders/
+                                         // users  → outputDir/users/
+
+  // === HAPPY PATH ИНТЕГРАЦИЯ ===
+  useHappyPathData?: boolean;            // Использовать Happy Path данные (default: true)
+  dbConnection?: any;                    // postgres connection
+  dbSchema?: string;                     // Схема БД (default: 'qa')
+  happyPathSamplesCount?: number;        // Количество записей (default: 15)
+
+  // === ПУТИ ИМПОРТОВ ===
+  baseTestPath?: string;                 // Путь к базовому тесту (default: '../../../fixtures/baseTest')
+  axiosHelpersPath?: string;             // Путь к axios helpers (default: '../../../helpers/axiosHelpers')
+  apiTestHelperPath?: string;            // Путь к API test helpers (default: '../../../helpers/apiTestHelper')
+}
+
+async function generateNegativeTests(config: NegativeTestConfig): Promise<GenerationResult>
+```
+
+#### Возвращаемый результат
+
+```typescript
+interface GenerationResult {
+  generatedCount: number;                // Создано тестов
+  updatedCount: number;                  // Обновлено тестов
+  skippedCount: number;                  // Пропущено (@readonly)
+  failedCount: number;                   // Не удалось сгенерировать ⭐ NEW
+  failures: GenerationFailure[];         // Детали неудач ⭐ NEW
+}
+
+interface GenerationFailure {
+  methodName: string;                    // Имя метода
+  reason: 'no_dto' | 'no_endpoint' | 'parse_error' | 'write_error' | 'other';
+  details: string;                       // Подробности
+}
+```
+
+#### Пример использования
+
+```typescript
+import { generateNegativeTests } from '@your-company/api-codegen';
+import sql from './db';
+
+// Вариант 1: Один файл
+const result = await generateNegativeTests({
+  apiFilePath: './api/orders.api.ts',
+  outputDir: './tests/api/negative',
+  generate401Tests: true,
+  generate403Tests: true,
+  generate400Tests: true,
+  generate404Tests: true,
+  generate405Tests: true,
+  dbConnection: sql
+});
+
+// Вариант 2: Вся папка с автогруппировкой ⭐ NEW
+const result = await generateNegativeTests({
+  apiFilePath: './api/',  // ← Вся папка!
+  outputDir: './tests/api/negative',
+  groupByCategory: true,  // ← Создаст подпапки orders/, users/ и т.д.
+  dbConnection: sql
+});
+
+console.log(`✅ Создано: ${result.generatedCount}`);
+console.log(`♻️  Обновлено: ${result.updatedCount}`);
+console.log(`⏭️  Пропущено: ${result.skippedCount}`);
+console.log(`❌ Не удалось: ${result.failedCount}`);
+
+if (result.failedCount > 0) {
+  console.log('\nДетали неудач:');
+  result.failures.forEach(f => {
+    console.log(`- ${f.methodName}: ${f.reason} - ${f.details}`);
+  });
+}
+```
+
+#### Результат (с группировкой)
+
+```
+tests/api/negative/
+├── orders/                    # Группа "orders"
+│   ├── createOrder.test.ts
+│   ├── getOrderById.test.ts
+│   └── updateOrder.test.ts
+├── users/                     # Группа "users"
+│   ├── createUser.test.ts
+│   ├── getUserById.test.ts
+│   └── updateUser.test.ts
+└── other/                     # Прочие
+    └── healthCheck.test.ts
+```
+
+#### Интеграция apiTestHelper ⭐ NEW
+
+Теперь `apiTestHelper` **правильно используется** в негативных тестах:
+
+```typescript
+// Сгенерированный тест
+test(`POST без TOKEN (401) @api @negative`, async ({ page }, testInfo) => {
+  try {
+    await axios.post(process.env.StandURL + endpoint, {}, configApiHeaderAdmin);
+    throw new Error('Ожидалась ошибка 401');
+  } catch (error: any) {
+    // ⭐ apiTestHelper используется здесь!
+    const errorMessage = getMessageFromError(error);
+
+    await expect(error.response.status, errorMessage).toBe(401);
+    await expect(error.response.statusText).toBe("Unauthorized");
+  }
+});
+```
+
+---
+
+### generatePositiveTests() ⭐ NEW v14.0
+
+Генерирует **ТОЛЬКО позитивные** Playwright тесты для API методов.
+
+#### Интерфейс
+
+```typescript
+interface PositiveTestConfig {
+  // === ОБЯЗАТЕЛЬНЫЕ ===
+  apiFilePath: string;                   // Путь к файлу ИЛИ папке с API методами
+  outputDir: string;                     // Папка для тестов
+
+  // === НАСТРОЙКА ПОЗИТИВНЫХ ТЕСТОВ ===
+  generateRequiredFieldsTest?: boolean;  // Тест с обязательными полями (default: true)
+  generateAllFieldsTest?: boolean;       // Тест со всеми полями (default: true)
+
+  // === ГРУППИРОВКА ===
+  groupByCategory?: boolean;             // Группировать по категориям (default: true)
+
+  // === HAPPY PATH ИНТЕГРАЦИЯ ===
+  useHappyPathData?: boolean;            // Использовать Happy Path данные (default: true)
+  dbConnection?: any;                    // postgres connection
+  dbSchema?: string;                     // Схема БД (default: 'qa')
+  happyPathSamplesCount?: number;        // Количество записей (default: 15)
+
+  // === ПУТИ ИМПОРТОВ ===
+  baseTestPath?: string;
+  axiosHelpersPath?: string;
+  apiTestHelperPath?: string;
+}
+
+async function generatePositiveTests(config: PositiveTestConfig): Promise<GenerationResult>
+```
+
+#### Пример использования
+
+```typescript
+import { generatePositiveTests } from '@your-company/api-codegen';
+import sql from './db';
+
+const result = await generatePositiveTests({
+  apiFilePath: './api/',
+  outputDir: './tests/api/positive',
+  generateRequiredFieldsTest: true,
+  generateAllFieldsTest: true,
+  groupByCategory: true,
+  dbConnection: sql
+});
+```
+
+---
+
+### generatePairwiseTests() ⭐ NEW v14.0
+
+Генерирует **ТОЛЬКО pairwise** комбинации для API методов.
+
+#### Интерфейс
+
+```typescript
+interface PairwiseTestConfig {
+  // === ОБЯЗАТЕЛЬНЫЕ ===
+  apiFilePath: string;                   // Путь к файлу ИЛИ папке с API методами
+  outputDir: string;                     // Папка для тестов
+
+  // === НАСТРОЙКА PAIRWISE ===
+  generateOptionalCombinations?: boolean; // Комбинации необязательных полей (default: true)
+  generateEnumTests?: boolean;           // Тесты для enum значений (default: true)
+  maxPairwiseCombinations?: number;      // Максимум комбинаций (default: 10)
+
+  // === ГРУППИРОВКА ===
+  groupByCategory?: boolean;             // Группировать по категориям (default: true)
+
+  // === HAPPY PATH ИНТЕГРАЦИЯ ===
+  useHappyPathData?: boolean;            // Использовать Happy Path данные (default: true)
+  dbConnection?: any;                    // postgres connection
+  dbSchema?: string;                     // Схема БД (default: 'qa')
+  happyPathSamplesCount?: number;        // Количество записей (default: 15)
+
+  // === ПУТИ ИМПОРТОВ ===
+  baseTestPath?: string;
+  axiosHelpersPath?: string;
+  apiTestHelperPath?: string;
+}
+
+async function generatePairwiseTests(config: PairwiseTestConfig): Promise<GenerationResult>
+```
+
+#### Пример использования
+
+```typescript
+import { generatePairwiseTests } from '@your-company/api-codegen';
+import sql from './db';
+
+const result = await generatePairwiseTests({
+  apiFilePath: './api/',
+  outputDir: './tests/api/pairwise',
+  generateOptionalCombinations: true,
+  generateEnumTests: true,
+  maxPairwiseCombinations: 10,
+  groupByCategory: true,
+  dbConnection: sql
+});
+```
+
+---
+
+### 🔒 Защита тестов от обновления ⭐ NEW
+
+Иногда требуется защитить отдельные тесты от перезаписи при повторной генерации (например, тест с ожидаемой 400 ошибкой).
+
+#### Способ 1: Защита ВСЕГО файла
+
+Добавьте в начало файла (первые 500 символов):
+
+```typescript
+// @readonly
+
+import test, { expect } from '../../../fixtures/baseTest';
+// ... остальной код
+```
+
+Файл будет **полностью пропущен** при генерации.
+
+#### Способ 2: Защита КОНКРЕТНОГО теста
+
+Оберните тест в защищенные теги:
+
+```typescript
+/* @protected:start:custom400Test */
+test(`POST с некорректными данными (400) @api @negative`, async ({ page }, testInfo) => {
+  try {
+    await axios.post(process.env.StandURL + endpoint, { invalid: 'data' }, configApiHeaderAdmin);
+    throw new Error('Ожидалась ошибка 400');
+  } catch (error: any) {
+    // Это ожидаемая 400 ошибка от разработчиков - НЕ ИСПРАВЛЯТЬ
+    await expect(error.response.status).toBe(400);
+    await expect(error.response.data.message).toBe('Expected validation error');
+  }
+});
+/* @protected:end:custom400Test */
+```
+
+Или с однострочными комментариями:
+
+```typescript
+// @protected:start:custom400Test
+test(`POST с некорректными данными (400) @api @negative`, async ({ page }, testInfo) => {
+  // ваш кастомный код
+});
+// @protected:end:custom400Test
+```
+
+**Важно:**
+- `custom400Test` - уникальный ID блока (буквы, цифры, подчеркивания)
+- При повторной генерации защищенные блоки **полностью сохраняются**
+- Можно защитить несколько тестов в одном файле с разными ID
+
+---
+
+### generateApiTests() 🚫 DEPRECATED
+
+> ⚠️ **Устаревший метод!** Используйте раздельные методы:
+> - `generateNegativeTests()` - для негативных тестов
+> - `generatePositiveTests()` - для позитивных тестов
+> - `generatePairwiseTests()` - для pairwise тестов
 
 Генерирует Playwright тесты для API методов. **v13.0**: Интеграция с Happy Path данными.
 
