@@ -6,7 +6,18 @@ import { CodeGenerator } from './generator';
 import { transliterate } from './utils/transliterate';
 
 // Экспорт функции генерации тестов
-export { generateApiTests, ApiTestConfig } from './test-generator';
+export {
+  generateApiTests,
+  ApiTestConfig,
+  // НОВОЕ v14.0: Раздельные методы генерации
+  generateNegativeTests,
+  generatePositiveTests,
+  generatePairwiseTests,
+  NegativeTestConfig,
+  PositiveTestConfig,
+  PairwiseTestConfig,
+  BaseTestConfig
+} from './test-generator';
 
 // Экспорт анализатора базы данных
 export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';

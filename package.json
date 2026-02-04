@@ -9,6 +9,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./dist/*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    },
     "./finance": {
       "types": "./dist/finance/index.d.ts",
       "default": "./dist/finance/index.js"

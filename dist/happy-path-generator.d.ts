@@ -57,6 +57,7 @@ export interface HappyPathTestConfig {
         logChanges?: boolean;
         logPath?: string;
     };
+    debug?: boolean;
 }
 export declare class HappyPathTestGenerator {
     private sql;

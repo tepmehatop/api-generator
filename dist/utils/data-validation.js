@@ -196,8 +196,18 @@ async function validateRequest(request, config, axios) {
     }
     try {
         // Вызываем LIVE API
-        const standUrl = config.standUrl || process.env.StandURL || '';
+        const standUrl = config.standUrl || '';
+        if (!standUrl) {
+            console.warn(`⚠️  Stand URL не указан в конфигурации валидации`);
+            return {
+                isValid: true,
+                isStale: false,
+                changes: [],
+                action: 'keep'
+            };
+        }
         const fullUrl = standUrl + request.endpoint;
+        console.log(`🔍 Валидация: ${request.method} ${fullUrl}`);
         let liveResponse;
         if (request.method === 'GET') {
             liveResponse = await axios.get(fullUrl, config.axiosConfig);

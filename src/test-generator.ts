@@ -1,5 +1,6 @@
 /**
  * Генератор API тестов из сгенерированных API методов
+ * ВЕРСИЯ 14.0 - РАЗДЕЛЬНЫЕ МЕТОДЫ ГЕНЕРАЦИИ (negative, positive, pairwise)
  * ВЕРСИЯ 13.0 - ИНТЕГРАЦИЯ С HAPPY PATH ДАННЫМИ
  */
 
@@ -13,6 +14,7 @@ import {
   generatePairwiseCombinations,
   HappyPathData
 } from './utils/happy-path-data-fetcher';
+import { transliterate } from './utils/transliterate';
 
 /**
  * НОВОЕ v14.0: Базовый конфиг для всех типов тестов
@@ -286,33 +288,115 @@ function getAllApiFiles(dirPath: string): string[] {
 }
 
 /**
- * НОВОЕ v14.0: Определяет категорию метода по имени и пути
- * Примеры:
- * - /api/orders/search -> orders
- * - /api/users/{id} -> users
- * - getPetById -> pet
+ * НОВОЕ v14.0: Мапинг русских категорий на английские
+ */
+const russianToEnglishCategories: Record<string, string> = {
+  'Закупки': 'orders',
+  'закупки': 'orders',
+  'Заказы': 'orders',
+  'заказы': 'orders',
+  'Пользователи': 'users',
+  'пользователи': 'users',
+  'Товары': 'products',
+  'товары': 'products',
+  'Продукты': 'products',
+  'продукты': 'products',
+  'Финансы': 'finance',
+  'финансы': 'finance',
+  'Счета': 'invoices',
+  'счета': 'invoices',
+  'Платежи': 'payments',
+  'платежи': 'payments',
+  'Отчеты': 'reports',
+  'отчеты': 'reports',
+  'Статистика': 'statistics',
+  'статистика': 'statistics',
+  'Настройки': 'settings',
+  'настройки': 'settings',
+  'Документы': 'documents',
+  'документы': 'documents',
+  'Контрагенты': 'contractors',
+  'контрагенты': 'contractors',
+  'Склад': 'warehouse',
+  'склад': 'warehouse',
+  'Логистика': 'logistics',
+  'логистика': 'logistics',
+  'Доставка': 'delivery',
+  'доставка': 'delivery'
+};
+
+/**
+ * НОВОЕ v14.0: Переводит или транслитерирует категорию
+ */
+function translateCategory(category: string): string {
+  if (!category) return 'other';
+
+  const trimmed = category.trim();
+
+  // Проверяем в маппинге
+  if (russianToEnglishCategories[trimmed]) {
+    return russianToEnglishCategories[trimmed];
+  }
+
+  // Если есть русские буквы - транслитерируем
+  if (/[а-яА-ЯёЁ]/.test(trimmed)) {
+    return transliterate(trimmed)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  // Очищаем английские названия
+  return trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * НОВОЕ v14.0: Определяет категорию метода по @tags из комментариев
+ * Приоритеты:
+ * 1. @tags из комментария JSDoc (переводит/транслитерирует)
+ * 2. Путь после /api/v1/ или /api/v2/
+ * 3. Имя метода (getPetById -> pet)
+ * 4. Имя файла
  */
 function determineMethodCategory(method: ExtractedMethod): string {
-  // Стратегия 1: Извлекаем из пути endpoint
-  const pathMatch = method.path.match(/^\/api\/([^/]+)/);
-  if (pathMatch) {
-    return pathMatch[1].toLowerCase();
+  // Стратегия 1 (НОВОЕ): Берем из @tags комментария
+  if (method.tags && method.tags.length > 0) {
+    // Берем первый тег и переводим/транслитерируем
+    const firstTag = method.tags[0];
+    return translateCategory(firstTag);
   }
 
-  // Стратегия 2: Извлекаем из имени метода
+  // Стратегия 2: Извлекаем из пути после /api/v1/ или /api/v2/
+  // /api/v1/test/fillOrders -> test
+  // /api/v2/orders/search -> orders
+  const versionedPathMatch = method.path.match(/^\/api\/v\d+\/([^/]+)/);
+  if (versionedPathMatch) {
+    return translateCategory(versionedPathMatch[1]);
+  }
+
+  // Стратегия 3: Извлекаем из пути без версии
+  // /api/orders/search -> orders
+  const pathMatch = method.path.match(/^\/api\/([^/]+)/);
+  if (pathMatch && pathMatch[1] !== 'v1' && pathMatch[1] !== 'v2') {
+    return translateCategory(pathMatch[1]);
+  }
+
+  // Стратегия 4: Извлекаем из имени метода
   // getPetById -> pet
   // createOrder -> order
-  // updateUserProfile -> user
   const nameMatch = method.name.match(/^(?:get|post|put|patch|delete|create|update|find|search)([A-Z][a-z]+)/);
   if (nameMatch) {
-    return nameMatch[1].toLowerCase();
+    return translateCategory(nameMatch[1]);
   }
 
-  // Стратегия 3: Из имени файла
+  // Стратегия 5: Из имени файла
   if (method.sourceFile) {
     const fileName = path.basename(method.sourceFile, '.ts').replace('.api', '');
     if (fileName && fileName !== 'index') {
-      return fileName.toLowerCase();
+      return translateCategory(fileName);
     }
   }
 
@@ -880,7 +964,7 @@ export async function generateApiTests(config: ApiTestConfig): Promise<void> {
       const protectedAreas = extractProtectedAreas(existingContent);
       
       // Генерируем новое содержимое
-      const newContent = await generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
+      const newContent = await generateTestForMethod(method, fullConfig);
 
       // Восстанавливаем protected области
       const finalContent = restoreProtectedAreas(newContent, protectedAreas);
@@ -890,7 +974,7 @@ export async function generateApiTests(config: ApiTestConfig): Promise<void> {
       updatedCount++;
     } else {
       // Новый файл
-      const testContent = await generateTestForMethod(method, fullConfig as Required<ApiTestConfig>);
+      const testContent = await generateTestForMethod(method, fullConfig);
       fs.writeFileSync(testFilePath, testContent);
       console.log(`  ✅ ${testFileName} (создан)`);
       generatedCount++;
@@ -1195,7 +1279,17 @@ function createHappyPathDataFile(
  */
 async function generateNegativeTestForMethod(
   method: ExtractedMethod,
-  config: Required<NegativeTestConfig>
+  config: NegativeTestConfig & {
+    generate401Tests: boolean;
+    generate403Tests: boolean;
+    generate400Tests: boolean;
+    generate404Tests: boolean;
+    generate405Tests: boolean;
+    baseTestPath: string;
+    axiosHelpersPath: string;
+    apiTestHelperPath: string;
+    groupByCategory: boolean;
+  }
 ): Promise<string> {
   const lines: string[] = [];
 
@@ -1400,7 +1494,14 @@ async function generateNegativeTestForMethod(
  */
 async function generatePositiveTestForMethod(
   method: ExtractedMethod,
-  config: Required<PositiveTestConfig>
+  config: PositiveTestConfig & {
+    generateRequiredFieldsTest: boolean;
+    generateAllFieldsTest: boolean;
+    baseTestPath: string;
+    axiosHelpersPath: string;
+    apiTestHelperPath: string;
+    groupByCategory: boolean;
+  }
 ): Promise<string> {
   const lines: string[] = [];
 
@@ -1569,7 +1670,15 @@ async function generatePositiveTestForMethod(
  */
 async function generatePairwiseTestForMethod(
   method: ExtractedMethod,
-  config: Required<PairwiseTestConfig>
+  config: PairwiseTestConfig & {
+    generateOptionalCombinations: boolean;
+    generateEnumTests: boolean;
+    maxPairwiseCombinations: number;
+    baseTestPath: string;
+    axiosHelpersPath: string;
+    apiTestHelperPath: string;
+    groupByCategory: boolean;
+  }
 ): Promise<string> {
   const lines: string[] = [];
 
@@ -1749,7 +1858,7 @@ async function generatePairwiseTestForMethod(
 /**
  * Генерирует содержимое теста для метода
  */
-async function generateTestForMethod(method: ExtractedMethod, config: Required<ApiTestConfig>): Promise<string> {
+async function generateTestForMethod(method: ExtractedMethod, config: ApiTestConfig): Promise<string> {
   const lines: string[] = [];
 
   // НОВОЕ v13.0: Получаем данные из Happy Path тестов

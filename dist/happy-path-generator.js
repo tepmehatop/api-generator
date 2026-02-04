@@ -66,6 +66,203 @@ const data_comparison_1 = require("./utils/data-comparison");
 const test_deduplication_1 = require("./utils/test-deduplication");
 const data_validation_1 = require("./utils/data-validation");
 const axios_1 = __importDefault(require("axios"));
+/**
+ * НОВОЕ v13.0: Рекурсивный поиск файла в директории
+ */
+function findFileRecursively(dir, fileName, maxDepth = 5, currentDepth = 0) {
+    if (currentDepth > maxDepth)
+        return null;
+    try {
+        const items = fs.readdirSync(dir);
+        for (const item of items) {
+            // Пропускаем node_modules, .git и другие служебные папки
+            if (item === 'node_modules' || item === '.git' || item.startsWith('.')) {
+                continue;
+            }
+            const fullPath = path.join(dir, item);
+            try {
+                const stat = fs.statSync(fullPath);
+                if (stat.isFile()) {
+                    // Проверяем имя файла (без расширения и с расширениями .ts/.js)
+                    const baseName = path.basename(item, path.extname(item));
+                    if (baseName === fileName || item === fileName || item === `${fileName}.ts` || item === `${fileName}.js`) {
+                        return fullPath;
+                    }
+                }
+                else if (stat.isDirectory()) {
+                    // Рекурсивно ищем в поддиректориях
+                    const found = findFileRecursively(fullPath, fileName, maxDepth, currentDepth + 1);
+                    if (found)
+                        return found;
+                }
+            }
+            catch (err) {
+                // Пропускаем файлы/папки к которым нет доступа
+                continue;
+            }
+        }
+    }
+    catch (err) {
+        return null;
+    }
+    return null;
+}
+/**
+ * НОВОЕ v13.0: Умный поиск axios конфига с несколькими стратегиями
+ */
+async function findAndLoadAxiosConfig(configPath, configName, debug = false) {
+    const searchPaths = [];
+    const cwd = process.cwd();
+    if (debug) {
+        console.log(`🐛 Текущая рабочая директория: ${cwd}`);
+        console.log(`🐛 Ищем axios конфиг: ${configName}`);
+    }
+    // Стратегия 1: Попробовать указанный путь как есть
+    if (configPath) {
+        searchPaths.push(configPath);
+        // Стратегия 2: Попробовать путь относительно cwd
+        const absolutePath = path.isAbsolute(configPath)
+            ? configPath
+            : path.join(cwd, configPath);
+        searchPaths.push(absolutePath);
+        // Добавляем варианты с расширениями
+        searchPaths.push(absolutePath + '.ts');
+        searchPaths.push(absolutePath + '.js');
+    }
+    // Стратегия 3: Поиск по имени файла
+    const fileNameFromPath = configPath
+        ? path.basename(configPath, path.extname(configPath))
+        : 'axiosHelpers';
+    if (debug) {
+        console.log(`🐛 Имя файла для поиска: ${fileNameFromPath}`);
+        console.log(`🐛 Стратегии поиска:`);
+        console.log(`   1. Указанный путь: ${configPath || 'не указан'}`);
+        console.log(`   2. Относительно cwd: ${cwd}`);
+        console.log(`   3. Рекурсивный поиск по имени: ${fileNameFromPath}`);
+    }
+    // Пробуем каждый путь
+    for (const searchPath of searchPaths) {
+        if (debug) {
+            console.log(`🐛 Пробую путь: ${searchPath}`);
+        }
+        try {
+            const module = await Promise.resolve(`${searchPath}`).then(s => __importStar(require(s)));
+            if (module[configName]) {
+                if (debug) {
+                    console.log(`✓ Найден конфиг по пути: ${searchPath}`);
+                }
+                return module[configName];
+            }
+            else {
+                if (debug) {
+                    console.log(`   ⚠️  Файл найден, но не содержит '${configName}'`);
+                    console.log(`   Доступные экспорты:`, Object.keys(module));
+                }
+            }
+        }
+        catch (error) {
+            if (debug && !error.message.includes('Cannot find module')) {
+                console.log(`   ⚠️  Ошибка загрузки: ${error.message}`);
+            }
+        }
+    }
+    // Стратегия 4: Рекурсивный поиск файла
+    if (debug) {
+        console.log(`🐛 Начинаю рекурсивный поиск файла '${fileNameFromPath}' в ${cwd}...`);
+    }
+    const foundPath = findFileRecursively(cwd, fileNameFromPath);
+    if (foundPath) {
+        if (debug) {
+            console.log(`🐛 Файл найден: ${foundPath}`);
+        }
+        // Пробуем разные способы загрузки
+        const pathsToTry = [foundPath];
+        // Если это .ts файл, ищем скомпилированную .js версию
+        if (foundPath.endsWith('.ts')) {
+            const jsPath = foundPath.replace(/\.ts$/, '.js');
+            pathsToTry.push(jsPath);
+            // Также пробуем в dist/build папках
+            const dirName = path.dirname(foundPath);
+            const baseName = path.basename(foundPath, '.ts');
+            pathsToTry.push(path.join(dirName, '..', 'dist', baseName + '.js'));
+            pathsToTry.push(path.join(dirName, '..', 'build', baseName + '.js'));
+            pathsToTry.push(path.join(dirName, 'dist', baseName + '.js'));
+        }
+        for (const tryPath of pathsToTry) {
+            if (!fs.existsSync(tryPath))
+                continue;
+            if (debug) {
+                console.log(`🐛 Пробую загрузить: ${tryPath}`);
+            }
+            try {
+                // Способ 1: Динамический import с file:// протоколом
+                let module;
+                try {
+                    // Правильный формат file:// URL для разных платформ
+                    const fileUrl = new URL('file://' + (tryPath.startsWith('/') ? '' : '/') + tryPath.replace(/\\/g, '/')).href;
+                    if (debug) {
+                        console.log(`🐛   Пробую import с URL: ${fileUrl}`);
+                    }
+                    module = await Promise.resolve(`${fileUrl}`).then(s => __importStar(require(s)));
+                }
+                catch (importError) {
+                    if (debug) {
+                        console.log(`🐛   Import не сработал: ${importError.message}`);
+                    }
+                    // Способ 2: Используем require (для CommonJS)
+                    try {
+                        if (debug) {
+                            console.log(`🐛   Пробую require: ${tryPath}`);
+                        }
+                        // eslint-disable-next-line @typescript-eslint/no-var-requires
+                        module = require(tryPath);
+                    }
+                    catch (requireError) {
+                        if (debug) {
+                            console.log(`🐛   Require не сработал: ${requireError.message}`);
+                        }
+                        continue;
+                    }
+                }
+                // Проверяем наличие конфига
+                if (module && module[configName]) {
+                    if (debug) {
+                        console.log(`✓ Конфиг '${configName}' найден в файле: ${tryPath}`);
+                    }
+                    return module[configName];
+                }
+                else if (module && module.default && module.default[configName]) {
+                    // Проверяем default export
+                    if (debug) {
+                        console.log(`✓ Конфиг '${configName}' найден в default export файла: ${tryPath}`);
+                    }
+                    return module.default[configName];
+                }
+                else {
+                    if (debug) {
+                        const availableKeys = module ? Object.keys(module) : [];
+                        console.log(`⚠️  Файл загружен, но не содержит '${configName}'`);
+                        console.log(`   Доступные экспорты:`, availableKeys);
+                        if (module?.default) {
+                            console.log(`   Экспорты в default:`, Object.keys(module.default));
+                        }
+                    }
+                }
+            }
+            catch (error) {
+                if (debug) {
+                    console.log(`❌ Ошибка при загрузке ${tryPath}: ${error.message}`);
+                }
+            }
+        }
+    }
+    else {
+        if (debug) {
+            console.log(`⚠️  Файл '${fileNameFromPath}' не найден в проекте`);
+        }
+    }
+    return null;
+}
 class HappyPathTestGenerator {
     constructor(config, sqlConnection) {
         // Читаем package.json для получения названия пакета
@@ -96,6 +293,7 @@ class HappyPathTestGenerator {
             mergeDuplicateTests: true,
             testImportPath: '@playwright/test', // ИСПРАВЛЕНИЕ 1
             packageName: defaultPackageName, // ИСПРАВЛЕНИЕ 11: Автоматически из package.json
+            debug: false, // НОВОЕ v13.0: Debug режим по умолчанию выключен
             ...config,
             // НОВОЕ v12.0: Дефолтные настройки дедупликации
             deduplication: {
@@ -127,12 +325,93 @@ class HappyPathTestGenerator {
     async generate() {
         console.log('🔍 Подключаюсь к БД и собираю данные...');
         console.log(this.config.force ? '⚠️  FORCE режим' : 'ℹ️  Инкрементальный режим');
+        if (this.config.debug) {
+            console.log('🐛 DEBUG MODE: Включен детальный вывод');
+            console.log('🐛 Конфигурация:', JSON.stringify({
+                standUrlEnvVar: this.config.standUrlEnvVar,
+                standUrl: process.env[this.config.standUrlEnvVar],
+                axiosConfigName: this.config.axiosConfigName,
+                axiosConfigPath: this.config.axiosConfigPath,
+                dbSchema: this.config.dbSchema
+            }, null, 2));
+        }
         let uniqueRequests = await this.fetchUniqueRequests();
         console.log(`📊 Найдено ${uniqueRequests.length} уникальных запросов`);
         // НОВОЕ v12.0: Валидация данных (проверка актуальности)
         if (this.config.dataValidation.enabled && this.config.dataValidation.validateBeforeGeneration) {
             try {
-                const validationResult = await (0, data_validation_1.validateRequests)(uniqueRequests, this.config.dataValidation, axios_1.default);
+                // НОВОЕ v13.0: Умная загрузка axios конфига с автопоиском
+                let axiosConfigObject = undefined;
+                if (this.config.axiosConfigName) {
+                    console.log(`\n🔍 Поиск axios конфига '${this.config.axiosConfigName}'...`);
+                    const loadedAxiosConfig = await findAndLoadAxiosConfig(this.config.axiosConfigPath, this.config.axiosConfigName, this.config.debug);
+                    if (loadedAxiosConfig) {
+                        console.log(`✓ Axios конфиг '${this.config.axiosConfigName}' загружен успешно`);
+                        // Проверяем: это axios instance или просто объект конфигурации?
+                        const isAxiosInstance = typeof loadedAxiosConfig?.get === 'function';
+                        if (isAxiosInstance) {
+                            // Это axios instance - извлекаем конфиг
+                            axiosConfigObject = loadedAxiosConfig.defaults;
+                            if (this.config.debug) {
+                                console.log(`🐛 Загружен axios instance`);
+                                console.log(`🐛 Конфиг содержит:`, {
+                                    hasHeaders: !!axiosConfigObject?.headers,
+                                    hasAuth: !!axiosConfigObject?.headers?.Authorization,
+                                    baseURL: axiosConfigObject?.baseURL
+                                });
+                            }
+                        }
+                        else {
+                            // Это просто объект конфигурации
+                            axiosConfigObject = loadedAxiosConfig;
+                            if (this.config.debug) {
+                                console.log(`🐛 Загружен объект конфигурации`);
+                                console.log(`🐛 Конфиг содержит:`, {
+                                    hasHeaders: !!axiosConfigObject?.headers,
+                                    hasAuth: !!axiosConfigObject?.headers?.authorization || !!axiosConfigObject?.headers?.Authorization,
+                                    hasHttpsAgent: !!axiosConfigObject?.httpsAgent
+                                });
+                            }
+                        }
+                        // Показываем все заголовки в debug режиме
+                        if (this.config.debug && axiosConfigObject?.headers) {
+                            console.log(`🐛 Все заголовки:`, JSON.stringify(axiosConfigObject.headers, null, 2));
+                        }
+                    }
+                    else {
+                        console.warn(`⚠️  Не удалось найти axios конфиг '${this.config.axiosConfigName}'`);
+                        console.warn(`⚠️  Продолжаю без авторизации (могут быть 401 ошибки)`);
+                    }
+                }
+                // Получаем URL стенда из переменной окружения
+                const standUrl = process.env[this.config.standUrlEnvVar];
+                if (!standUrl) {
+                    console.warn(`⚠️  Переменная окружения ${this.config.standUrlEnvVar} не установлена`);
+                    if (this.config.debug) {
+                        console.log(`🐛 Доступные env переменные:`, Object.keys(process.env).filter(k => k.includes('URL')));
+                    }
+                }
+                else if (this.config.debug) {
+                    console.log(`🐛 Stand URL: ${standUrl}`);
+                }
+                // Обновляем конфиг валидации с правильными настройками
+                const validationConfig = {
+                    ...this.config.dataValidation,
+                    standUrl: standUrl || this.config.dataValidation.standUrl,
+                    axiosConfig: axiosConfigObject
+                };
+                if (this.config.debug) {
+                    console.log(`🐛 Конфиг валидации:`, {
+                        enabled: validationConfig.enabled,
+                        validateBeforeGeneration: validationConfig.validateBeforeGeneration,
+                        standUrl: validationConfig.standUrl,
+                        hasAxiosConfig: !!validationConfig.axiosConfig,
+                        hasAuthHeader: !!validationConfig.axiosConfig?.headers?.authorization || !!validationConfig.axiosConfig?.headers?.Authorization
+                    });
+                }
+                // ВАЖНО: Передаем настоящий axios, а конфиг - отдельно в validationConfig
+                const validationResult = await (0, data_validation_1.validateRequests)(uniqueRequests, validationConfig, axios_1.default // ← Настоящий axios, не конфиг!
+                );
                 uniqueRequests = validationResult.validRequests;
                 console.log(`\n✅ Валидация завершена:`);
                 console.log(`   Осталось запросов: ${uniqueRequests.length}`);
@@ -147,7 +426,10 @@ class HappyPathTestGenerator {
                 }
             }
             catch (error) {
-                console.error('❌ Ошибка при валидации данных:', error);
+                console.error('❌ Ошибка при валидации данных:', error.message);
+                if (this.config.debug) {
+                    console.error('🐛 Полная ошибка:', error);
+                }
                 console.log('⚠️  Продолжаю без валидации');
             }
         }

@@ -1,6 +1,7 @@
 "use strict";
 /**
  * Генератор API тестов из сгенерированных API методов
+ * ВЕРСИЯ 14.0 - РАЗДЕЛЬНЫЕ МЕТОДЫ ГЕНЕРАЦИИ (negative, positive, pairwise)
  * ВЕРСИЯ 13.0 - ИНТЕГРАЦИЯ С HAPPY PATH ДАННЫМИ
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
@@ -37,11 +38,587 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.generateNegativeTests = generateNegativeTests;
+exports.generatePositiveTests = generatePositiveTests;
+exports.generatePairwiseTests = generatePairwiseTests;
 exports.generateApiTests = generateApiTests;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const happy_path_data_fetcher_1 = require("./utils/happy-path-data-fetcher");
+const transliterate_1 = require("./utils/transliterate");
 /**
+ * НОВОЕ v14.0: Проверяет является ли путь папкой
+ */
+function isDirectory(filePath) {
+    try {
+        return fs.statSync(filePath).isDirectory();
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * НОВОЕ v14.0: Получает все .ts файлы из папки (рекурсивно)
+ */
+function getAllApiFiles(dirPath) {
+    const files = [];
+    if (!fs.existsSync(dirPath)) {
+        console.warn(`⚠️  Путь не существует: ${dirPath}`);
+        return files;
+    }
+    if (!isDirectory(dirPath)) {
+        // Это файл - возвращаем его
+        return [dirPath];
+    }
+    // Это папка - ищем все .ts файлы
+    const items = fs.readdirSync(dirPath);
+    for (const item of items) {
+        const fullPath = path.join(dirPath, item);
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile() && item.endsWith('.ts') && !item.endsWith('.test.ts') && !item.endsWith('.spec.ts')) {
+            files.push(fullPath);
+        }
+        else if (stat.isDirectory() && !item.startsWith('.') && item !== 'node_modules') {
+            // Рекурсивно обходим подпапки
+            files.push(...getAllApiFiles(fullPath));
+        }
+    }
+    return files;
+}
+/**
+ * НОВОЕ v14.0: Мапинг русских категорий на английские
+ */
+const russianToEnglishCategories = {
+    'Закупки': 'orders',
+    'закупки': 'orders',
+    'Заказы': 'orders',
+    'заказы': 'orders',
+    'Пользователи': 'users',
+    'пользователи': 'users',
+    'Товары': 'products',
+    'товары': 'products',
+    'Продукты': 'products',
+    'продукты': 'products',
+    'Финансы': 'finance',
+    'финансы': 'finance',
+    'Счета': 'invoices',
+    'счета': 'invoices',
+    'Платежи': 'payments',
+    'платежи': 'payments',
+    'Отчеты': 'reports',
+    'отчеты': 'reports',
+    'Статистика': 'statistics',
+    'статистика': 'statistics',
+    'Настройки': 'settings',
+    'настройки': 'settings',
+    'Документы': 'documents',
+    'документы': 'documents',
+    'Контрагенты': 'contractors',
+    'контрагенты': 'contractors',
+    'Склад': 'warehouse',
+    'склад': 'warehouse',
+    'Логистика': 'logistics',
+    'логистика': 'logistics',
+    'Доставка': 'delivery',
+    'доставка': 'delivery'
+};
+/**
+ * НОВОЕ v14.0: Переводит или транслитерирует категорию
+ */
+function translateCategory(category) {
+    if (!category)
+        return 'other';
+    const trimmed = category.trim();
+    // Проверяем в маппинге
+    if (russianToEnglishCategories[trimmed]) {
+        return russianToEnglishCategories[trimmed];
+    }
+    // Если есть русские буквы - транслитерируем
+    if (/[а-яА-ЯёЁ]/.test(trimmed)) {
+        return (0, transliterate_1.transliterate)(trimmed)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+    }
+    // Очищаем английские названия
+    return trimmed
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+/**
+ * НОВОЕ v14.0: Определяет категорию метода по @tags из комментариев
+ * Приоритеты:
+ * 1. @tags из комментария JSDoc (переводит/транслитерирует)
+ * 2. Путь после /api/v1/ или /api/v2/
+ * 3. Имя метода (getPetById -> pet)
+ * 4. Имя файла
+ */
+function determineMethodCategory(method) {
+    // Стратегия 1 (НОВОЕ): Берем из @tags комментария
+    if (method.tags && method.tags.length > 0) {
+        // Берем первый тег и переводим/транслитерируем
+        const firstTag = method.tags[0];
+        return translateCategory(firstTag);
+    }
+    // Стратегия 2: Извлекаем из пути после /api/v1/ или /api/v2/
+    // /api/v1/test/fillOrders -> test
+    // /api/v2/orders/search -> orders
+    const versionedPathMatch = method.path.match(/^\/api\/v\d+\/([^/]+)/);
+    if (versionedPathMatch) {
+        return translateCategory(versionedPathMatch[1]);
+    }
+    // Стратегия 3: Извлекаем из пути без версии
+    // /api/orders/search -> orders
+    const pathMatch = method.path.match(/^\/api\/([^/]+)/);
+    if (pathMatch && pathMatch[1] !== 'v1' && pathMatch[1] !== 'v2') {
+        return translateCategory(pathMatch[1]);
+    }
+    // Стратегия 4: Извлекаем из имени метода
+    // getPetById -> pet
+    // createOrder -> order
+    const nameMatch = method.name.match(/^(?:get|post|put|patch|delete|create|update|find|search)([A-Z][a-z]+)/);
+    if (nameMatch) {
+        return translateCategory(nameMatch[1]);
+    }
+    // Стратегия 5: Из имени файла
+    if (method.sourceFile) {
+        const fileName = path.basename(method.sourceFile, '.ts').replace('.api', '');
+        if (fileName && fileName !== 'index') {
+            return translateCategory(fileName);
+        }
+    }
+    // По умолчанию - 'other'
+    return 'other';
+}
+/**
+ * НОВОЕ v14.0: Генерирует API тесты для негативных сценариев
+ */
+async function generateNegativeTests(config) {
+    const fullConfig = {
+        generate401Tests: true,
+        generate403Tests: true,
+        generate400Tests: true,
+        generate404Tests: true,
+        generate405Tests: true,
+        baseTestPath: '../../../fixtures/baseTest',
+        axiosHelpersPath: '../../../helpers/axiosHelpers',
+        apiTestHelperPath: '../../../helpers/apiTestHelper',
+        useHappyPathData: true,
+        dbSchema: 'qa',
+        happyPathSamplesCount: 15,
+        maxDataGenerationAttempts: 10,
+        standUrl: process.env.StandURL,
+        authToken: process.env.AUTH_TOKEN,
+        groupByCategory: true,
+        ...config
+    };
+    console.log('🧪 Начинаю генерацию НЕГАТИВНЫХ тестов...');
+    // Получаем все файлы для обработки
+    const apiFiles = getAllApiFiles(fullConfig.apiFilePath);
+    console.log(`📁 Найдено файлов: ${apiFiles.length}`);
+    if (apiFiles.length === 0) {
+        console.warn('⚠️  Не найдено ни одного API файла для обработки');
+        return {
+            generatedCount: 0,
+            updatedCount: 0,
+            skippedCount: 0,
+            failedCount: 0,
+            failures: []
+        };
+    }
+    const result = {
+        generatedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        failures: []
+    };
+    // Обрабатываем каждый файл
+    for (const apiFile of apiFiles) {
+        console.log(`\n📄 Обработка файла: ${path.basename(apiFile)}`);
+        try {
+            const apiFileContent = fs.readFileSync(apiFile, 'utf-8');
+            const methods = extractMethodsFromFile(apiFileContent, apiFile);
+            // Добавляем информацию об исходном файле и категории
+            methods.forEach(method => {
+                method.sourceFile = apiFile;
+                method.category = determineMethodCategory(method);
+            });
+            console.log(`  ✓ Найдено методов: ${methods.length}`);
+            // Генерируем тесты для каждого метода
+            for (const method of methods) {
+                if (!method.path || method.path.trim() === '') {
+                    console.warn(`  ⚠️  Пропускаю ${method.name} - endpoint не найден`);
+                    result.failedCount++;
+                    result.failures.push({
+                        methodName: method.name,
+                        reason: 'no_endpoint',
+                        details: `Endpoint не найден для метода ${method.name}`
+                    });
+                    continue;
+                }
+                // Определяем выходную папку (с группировкой по категориям или без)
+                let outputDir = fullConfig.outputDir;
+                if (fullConfig.groupByCategory && method.category) {
+                    outputDir = path.join(fullConfig.outputDir, method.category);
+                }
+                // Создаем выходную папку если не существует
+                if (!fs.existsSync(outputDir)) {
+                    fs.mkdirSync(outputDir, { recursive: true });
+                }
+                const testFileName = generateTestFileName(method);
+                const testFilePath = path.join(outputDir, testFileName);
+                try {
+                    // Проверяем существует ли файл
+                    if (fs.existsSync(testFilePath)) {
+                        const existingContent = fs.readFileSync(testFilePath, 'utf-8');
+                        // Проверяем тег исключения на весь файл
+                        if (hasReadOnlyTag(existingContent)) {
+                            console.log(`    ⏭️  ${testFileName} (пропущен - помечен как ReadOnly)`);
+                            result.skippedCount++;
+                            continue;
+                        }
+                        // Извлекаем protected области
+                        const protectedAreas = extractProtectedAreas(existingContent);
+                        // Генерируем новое содержимое (только негативные тесты)
+                        const newContent = await generateNegativeTestForMethod(method, fullConfig);
+                        // Восстанавливаем protected области
+                        const finalContent = restoreProtectedAreas(newContent, protectedAreas);
+                        fs.writeFileSync(testFilePath, finalContent);
+                        console.log(`    ♻️  ${testFileName} (обновлен)`);
+                        result.updatedCount++;
+                    }
+                    else {
+                        // Новый файл
+                        const testContent = await generateNegativeTestForMethod(method, fullConfig);
+                        fs.writeFileSync(testFilePath, testContent);
+                        console.log(`    ✅ ${testFileName} (создан)`);
+                        result.generatedCount++;
+                    }
+                }
+                catch (error) {
+                    console.error(`    ❌ Ошибка генерации ${testFileName}: ${error.message}`);
+                    result.failedCount++;
+                    result.failures.push({
+                        methodName: method.name,
+                        reason: 'write_error',
+                        details: error.message
+                    });
+                }
+            }
+        }
+        catch (error) {
+            console.error(`  ❌ Ошибка обработки файла ${path.basename(apiFile)}: ${error.message}`);
+            result.failedCount++;
+            result.failures.push({
+                methodName: `file:${path.basename(apiFile)}`,
+                reason: 'parse_error',
+                details: error.message
+            });
+        }
+    }
+    // Выводим отчет
+    printGenerationReport(result, 'НЕГАТИВНЫЕ');
+    console.log(`📁 Путь: ${fullConfig.outputDir}`);
+    return result;
+}
+/**
+ * НОВОЕ v14.0: Генерирует API тесты для позитивных сценариев
+ */
+async function generatePositiveTests(config) {
+    const fullConfig = {
+        generateRequiredFieldsTest: true,
+        generateAllFieldsTest: true,
+        baseTestPath: '../../../fixtures/baseTest',
+        axiosHelpersPath: '../../../helpers/axiosHelpers',
+        apiTestHelperPath: '../../../helpers/apiTestHelper',
+        useHappyPathData: true,
+        dbSchema: 'qa',
+        happyPathSamplesCount: 15,
+        maxDataGenerationAttempts: 10,
+        standUrl: process.env.StandURL,
+        authToken: process.env.AUTH_TOKEN,
+        groupByCategory: true,
+        ...config
+    };
+    console.log('🧪 Начинаю генерацию ПОЗИТИВНЫХ тестов...');
+    // Получаем все файлы для обработки
+    const apiFiles = getAllApiFiles(fullConfig.apiFilePath);
+    console.log(`📁 Найдено файлов: ${apiFiles.length}`);
+    if (apiFiles.length === 0) {
+        console.warn('⚠️  Не найдено ни одного API файла для обработки');
+        return {
+            generatedCount: 0,
+            updatedCount: 0,
+            skippedCount: 0,
+            failedCount: 0,
+            failures: []
+        };
+    }
+    const result = {
+        generatedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        failures: []
+    };
+    // Обрабатываем каждый файл
+    for (const apiFile of apiFiles) {
+        console.log(`\n📄 Обработка файла: ${path.basename(apiFile)}`);
+        try {
+            const apiFileContent = fs.readFileSync(apiFile, 'utf-8');
+            const methods = extractMethodsFromFile(apiFileContent, apiFile);
+            // Добавляем информацию об исходном файле и категории
+            methods.forEach(method => {
+                method.sourceFile = apiFile;
+                method.category = determineMethodCategory(method);
+            });
+            console.log(`  ✓ Найдено методов: ${methods.length}`);
+            // Генерируем тесты для каждого метода
+            for (const method of methods) {
+                if (!method.path || method.path.trim() === '') {
+                    console.warn(`  ⚠️  Пропускаю ${method.name} - endpoint не найден`);
+                    result.failedCount++;
+                    result.failures.push({
+                        methodName: method.name,
+                        reason: 'no_endpoint',
+                        details: `Endpoint не найден для метода ${method.name}`
+                    });
+                    continue;
+                }
+                // Определяем выходную папку (с группировкой по категориям или без)
+                let outputDir = fullConfig.outputDir;
+                if (fullConfig.groupByCategory && method.category) {
+                    outputDir = path.join(fullConfig.outputDir, method.category);
+                }
+                // Создаем выходную папку если не существует
+                if (!fs.existsSync(outputDir)) {
+                    fs.mkdirSync(outputDir, { recursive: true });
+                }
+                const testFileName = generateTestFileName(method);
+                const testFilePath = path.join(outputDir, testFileName);
+                try {
+                    // Проверяем существует ли файл
+                    if (fs.existsSync(testFilePath)) {
+                        const existingContent = fs.readFileSync(testFilePath, 'utf-8');
+                        // Проверяем тег исключения на весь файл
+                        if (hasReadOnlyTag(existingContent)) {
+                            console.log(`    ⏭️  ${testFileName} (пропущен - помечен как ReadOnly)`);
+                            result.skippedCount++;
+                            continue;
+                        }
+                        // Извлекаем protected области
+                        const protectedAreas = extractProtectedAreas(existingContent);
+                        // Генерируем новое содержимое (только позитивные тесты)
+                        const newContent = await generatePositiveTestForMethod(method, fullConfig);
+                        // Восстанавливаем protected области
+                        const finalContent = restoreProtectedAreas(newContent, protectedAreas);
+                        fs.writeFileSync(testFilePath, finalContent);
+                        console.log(`    ♻️  ${testFileName} (обновлен)`);
+                        result.updatedCount++;
+                    }
+                    else {
+                        // Новый файл
+                        const testContent = await generatePositiveTestForMethod(method, fullConfig);
+                        fs.writeFileSync(testFilePath, testContent);
+                        console.log(`    ✅ ${testFileName} (создан)`);
+                        result.generatedCount++;
+                    }
+                }
+                catch (error) {
+                    console.error(`    ❌ Ошибка генерации ${testFileName}: ${error.message}`);
+                    result.failedCount++;
+                    result.failures.push({
+                        methodName: method.name,
+                        reason: 'write_error',
+                        details: error.message
+                    });
+                }
+            }
+        }
+        catch (error) {
+            console.error(`  ❌ Ошибка обработки файла ${path.basename(apiFile)}: ${error.message}`);
+            result.failedCount++;
+            result.failures.push({
+                methodName: `file:${path.basename(apiFile)}`,
+                reason: 'parse_error',
+                details: error.message
+            });
+        }
+    }
+    // Выводим отчет
+    printGenerationReport(result, 'ПОЗИТИВНЫЕ');
+    console.log(`📁 Путь: ${fullConfig.outputDir}`);
+    return result;
+}
+/**
+ * НОВОЕ v14.0: Генерирует pairwise тесты
+ */
+async function generatePairwiseTests(config) {
+    const fullConfig = {
+        generateOptionalCombinations: true,
+        generateEnumTests: true,
+        maxPairwiseCombinations: 10,
+        baseTestPath: '../../../fixtures/baseTest',
+        axiosHelpersPath: '../../../helpers/axiosHelpers',
+        apiTestHelperPath: '../../../helpers/apiTestHelper',
+        useHappyPathData: true,
+        dbSchema: 'qa',
+        happyPathSamplesCount: 15,
+        maxDataGenerationAttempts: 10,
+        standUrl: process.env.StandURL,
+        authToken: process.env.AUTH_TOKEN,
+        groupByCategory: true,
+        ...config
+    };
+    console.log('🧪 Начинаю генерацию PAIRWISE тестов...');
+    // Получаем все файлы для обработки
+    const apiFiles = getAllApiFiles(fullConfig.apiFilePath);
+    console.log(`📁 Найдено файлов: ${apiFiles.length}`);
+    if (apiFiles.length === 0) {
+        console.warn('⚠️  Не найдено ни одного API файла для обработки');
+        return {
+            generatedCount: 0,
+            updatedCount: 0,
+            skippedCount: 0,
+            failedCount: 0,
+            failures: []
+        };
+    }
+    const result = {
+        generatedCount: 0,
+        updatedCount: 0,
+        skippedCount: 0,
+        failedCount: 0,
+        failures: []
+    };
+    // Обрабатываем каждый файл
+    for (const apiFile of apiFiles) {
+        console.log(`\n📄 Обработка файла: ${path.basename(apiFile)}`);
+        try {
+            const apiFileContent = fs.readFileSync(apiFile, 'utf-8');
+            const methods = extractMethodsFromFile(apiFileContent, apiFile);
+            // Добавляем информацию об исходном файле и категории
+            methods.forEach(method => {
+                method.sourceFile = apiFile;
+                method.category = determineMethodCategory(method);
+            });
+            console.log(`  ✓ Найдено методов: ${methods.length}`);
+            // Генерируем тесты для каждого метода
+            for (const method of methods) {
+                if (!method.path || method.path.trim() === '') {
+                    console.warn(`  ⚠️  Пропускаю ${method.name} - endpoint не найден`);
+                    result.failedCount++;
+                    result.failures.push({
+                        methodName: method.name,
+                        reason: 'no_endpoint',
+                        details: `Endpoint не найден для метода ${method.name}`
+                    });
+                    continue;
+                }
+                // Определяем выходную папку (с группировкой по категориям или без)
+                let outputDir = fullConfig.outputDir;
+                if (fullConfig.groupByCategory && method.category) {
+                    outputDir = path.join(fullConfig.outputDir, method.category);
+                }
+                // Создаем выходную папку если не существует
+                if (!fs.existsSync(outputDir)) {
+                    fs.mkdirSync(outputDir, { recursive: true });
+                }
+                const testFileName = generateTestFileName(method);
+                const testFilePath = path.join(outputDir, testFileName);
+                try {
+                    // Проверяем существует ли файл
+                    if (fs.existsSync(testFilePath)) {
+                        const existingContent = fs.readFileSync(testFilePath, 'utf-8');
+                        // Проверяем тег исключения на весь файл
+                        if (hasReadOnlyTag(existingContent)) {
+                            console.log(`    ⏭️  ${testFileName} (пропущен - помечен как ReadOnly)`);
+                            result.skippedCount++;
+                            continue;
+                        }
+                        // Извлекаем protected области
+                        const protectedAreas = extractProtectedAreas(existingContent);
+                        // Генерируем новое содержимое (только pairwise тесты)
+                        const newContent = await generatePairwiseTestForMethod(method, fullConfig);
+                        // Восстанавливаем protected области
+                        const finalContent = restoreProtectedAreas(newContent, protectedAreas);
+                        fs.writeFileSync(testFilePath, finalContent);
+                        console.log(`    ♻️  ${testFileName} (обновлен)`);
+                        result.updatedCount++;
+                    }
+                    else {
+                        // Новый файл
+                        const testContent = await generatePairwiseTestForMethod(method, fullConfig);
+                        fs.writeFileSync(testFilePath, testContent);
+                        console.log(`    ✅ ${testFileName} (создан)`);
+                        result.generatedCount++;
+                    }
+                }
+                catch (error) {
+                    console.error(`    ❌ Ошибка генерации ${testFileName}: ${error.message}`);
+                    result.failedCount++;
+                    result.failures.push({
+                        methodName: method.name,
+                        reason: 'write_error',
+                        details: error.message
+                    });
+                }
+            }
+        }
+        catch (error) {
+            console.error(`  ❌ Ошибка обработки файла ${path.basename(apiFile)}: ${error.message}`);
+            result.failedCount++;
+            result.failures.push({
+                methodName: `file:${path.basename(apiFile)}`,
+                reason: 'parse_error',
+                details: error.message
+            });
+        }
+    }
+    // Выводим отчет
+    printGenerationReport(result, 'PAIRWISE');
+    console.log(`📁 Путь: ${fullConfig.outputDir}`);
+    return result;
+}
+/**
+ * НОВОЕ v14.0: Выводит отчет о генерации
+ */
+function printGenerationReport(result, testType) {
+    console.log(`\n✨ Генерация ${testType} тестов завершена!`);
+    console.log(`   Создано: ${result.generatedCount}`);
+    console.log(`   Обновлено: ${result.updatedCount}`);
+    console.log(`   Пропущено: ${result.skippedCount}`);
+    if (result.failedCount > 0) {
+        console.log(`   ⚠️  Не удалось сгенерировать: ${result.failedCount}`);
+        console.log(`\n📋 Детали неудачных генераций:`);
+        // Группируем по причинам
+        const groupedFailures = new Map();
+        for (const failure of result.failures) {
+            if (!groupedFailures.has(failure.reason)) {
+                groupedFailures.set(failure.reason, []);
+            }
+            groupedFailures.get(failure.reason).push(failure);
+        }
+        // Выводим по группам
+        for (const [reason, failures] of groupedFailures) {
+            const reasonText = {
+                'no_dto': 'DTO не найдено',
+                'no_endpoint': 'Endpoint не найден',
+                'parse_error': 'Ошибка парсинга',
+                'write_error': 'Ошибка записи',
+                'other': 'Прочие ошибки'
+            }[reason] || reason;
+            console.log(`\n   ${reasonText} (${failures.length}):`);
+            failures.forEach(f => {
+                console.log(`      - ${f.methodName}: ${f.details}`);
+            });
+        }
+    }
+}
+/**
+ * @deprecated Используйте отдельные методы: generateNegativeTests, generatePositiveTests, generatePairwiseTests
  * Генерирует API тесты из файла с методами
  */
 async function generateApiTests(config) {
@@ -349,6 +926,484 @@ function createHappyPathDataFile(methodName, happyPathData, outputDir) {
     console.log(`  ✓ Создан файл с Happy Path данными: ${path.relative(process.cwd(), dataFilePath)}`);
     // Возвращаем относительный путь для импорта
     return `./testData/${dataFileName.replace('.ts', '')}`;
+}
+/**
+ * НОВОЕ v14.0: Генерирует содержимое НЕГАТИВНОГО теста для метода
+ */
+async function generateNegativeTestForMethod(method, config) {
+    const lines = [];
+    // Импорты
+    lines.push(`import test, { expect } from '${config.baseTestPath}';`);
+    lines.push("import axios from 'axios';");
+    lines.push(`import { configApiHeaderAdmin, configApiHeaderNoRights } from '${config.axiosHelpersPath}';`);
+    lines.push(`import { getMessageFromResponse, getMessageFromError } from '${config.apiTestHelperPath || '../../../helpers/apiTestHelper'}';`);
+    lines.push('');
+    // Извлекаем ID параметры из пути
+    const pathParams = extractPathParams(method.path);
+    const hasIdParams = pathParams.length > 0;
+    // Если есть ID параметры, объявляем их заранее
+    if (hasIdParams) {
+        lines.push('// ID параметры для endpoint');
+        for (const param of pathParams) {
+            lines.push(`const ${param} = 1; // TODO: заменить на актуальный ID`);
+        }
+        lines.push('');
+    }
+    // Endpoint с подстановкой ID
+    let endpointValue = method.path;
+    if (hasIdParams) {
+        for (const param of pathParams) {
+            endpointValue = endpointValue.replace(`{${param}}`, `\${${param}}`);
+        }
+        lines.push(`const endpoint = \`${endpointValue}\`;`);
+    }
+    else {
+        lines.push(`const endpoint = '${endpointValue}';`);
+    }
+    lines.push(`const httpMethod = '${method.httpMethod}';`);
+    lines.push('');
+    // Коды статусов
+    lines.push('// Коды статусов');
+    lines.push('const apiErrorCodes = {');
+    lines.push('  unauthorized: 401,');
+    lines.push('  badRequest: 400,');
+    lines.push('  forbidden: 403,');
+    lines.push('  notFound: 404,');
+    lines.push('  methodNotAllowed: 405,');
+    lines.push('};');
+    lines.push('');
+    // Case Info
+    lines.push('// Информация о тест-кейсе');
+    lines.push('const caseInfoObj = {');
+    lines.push(`  testCase: 'T${Math.floor(Math.random() * 10000)}',`);
+    lines.push("  aqaOwner: 'AutoGenerated',");
+    lines.push(`  tms_testName: '${method.httpMethod} ${method.path}',`);
+    lines.push("  testType: 'api'");
+    lines.push('};');
+    lines.push('');
+    // Комментарий с проверками
+    lines.push('/**');
+    lines.push(' * НЕГАТИВНЫЕ ТЕСТЫ');
+    lines.push(' * Проверки:');
+    if (config.generate401Tests) {
+        lines.push(' * - Без токена (401)');
+    }
+    if (config.generate400Tests && hasBodyParam(method)) {
+        lines.push(' * - С токеном но без Body (400)');
+    }
+    if (config.generate405Tests) {
+        lines.push(' * - Проверка methodNotAllowed для неподдерживаемых HTTP методов');
+    }
+    if (config.generate403Tests && method.hasAuth) {
+        lines.push(' * - С токеном пользователя без прав (403)');
+    }
+    if (config.generate404Tests && hasIdParams) {
+        lines.push(' * - С несуществующим ID (404)');
+    }
+    lines.push(' */');
+    lines.push('');
+    // Test suite
+    lines.push('test.describe.configure({ mode: "parallel" });');
+    lines.push(`test.describe(\`API НЕГАТИВНЫЕ тесты для \${httpMethod} >> \${endpoint}\`, async () => {`);
+    lines.push('');
+    // Тест 1: Без токена (401)
+    if (config.generate401Tests) {
+        lines.push(`  test(\`\${httpMethod} без TOKEN (\${apiErrorCodes.unauthorized}) @api @negative\`, async ({ page }, testInfo) => {`);
+        const axiosCall = generateSimpleAxiosCall(method, false);
+        lines.push(`    try {`);
+        lines.push(`      await ${axiosCall};`);
+        lines.push(`      throw new Error('Ожидалась ошибка 401, но запрос прошел успешно');`);
+        lines.push(`    } catch (error: any) {`);
+        lines.push(`      // Используем apiTestHelper для детализации ошибки`);
+        lines.push('      const errorMessage = getMessageFromError(error);');
+        lines.push('      ');
+        lines.push('      await expect(error.response.status, errorMessage).toBe(apiErrorCodes.unauthorized);');
+        lines.push('      await expect(error.response.statusText).toBe("Unauthorized");');
+        lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
+        lines.push(`      await expect(error.config.method).toBe('${method.httpMethod.toLowerCase()}');`);
+        lines.push('      await expect(error.config.url).toContain(endpoint);');
+        lines.push('    }');
+        lines.push('  });');
+        lines.push('');
+    }
+    // Тест 2: С токеном но без body (400)
+    if (config.generate400Tests && hasBodyParam(method)) {
+        lines.push(`  test(\`\${httpMethod} с токеном без Body (\${apiErrorCodes.badRequest}) @api @negative\`, async ({ page }, testInfo) => {`);
+        const axiosCallNoBody = generateSimpleAxiosCall(method, true, true);
+        lines.push(`    try {`);
+        lines.push(`      await ${axiosCallNoBody};`);
+        lines.push(`      throw new Error('Ожидалась ошибка 400, но запрос прошел успешно');`);
+        lines.push(`    } catch (error: any) {`);
+        lines.push(`      const errorMessage = getMessageFromError(error);`);
+        lines.push('      ');
+        lines.push('      await expect(error.response.status, errorMessage).toBe(apiErrorCodes.badRequest);');
+        lines.push('      await expect(error.response.statusText).toBe("Bad Request");');
+        lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
+        lines.push(`      await expect(error.config.method).toBe('${method.httpMethod.toLowerCase()}');`);
+        lines.push('    }');
+        lines.push('  });');
+        lines.push('');
+    }
+    // Тесты 3-5: Method Not Allowed (405)
+    if (config.generate405Tests) {
+        const otherMethods = ['GET', 'POST', 'PUT', 'DELETE'].filter(m => m !== method.httpMethod);
+        for (const otherMethod of otherMethods.slice(0, 3)) {
+            lines.push(`  test(\`${otherMethod} с токеном (\${apiErrorCodes.methodNotAllowed}) @api @negative\`, async ({ page }, testInfo) => {`);
+            const wrongMethodCall = generateWrongMethodCall(otherMethod);
+            lines.push(`    try {`);
+            lines.push(`      await ${wrongMethodCall};`);
+            lines.push(`      throw new Error('Ожидалась ошибка 405, но запрос прошел успешно');`);
+            lines.push(`    } catch (error: any) {`);
+            lines.push(`      const errorMessage = getMessageFromError(error);`);
+            lines.push('      ');
+            lines.push('      await expect(error.response.status, errorMessage).toBe(apiErrorCodes.methodNotAllowed);');
+            lines.push('      await expect(error.response.statusText).toBe("Method Not Allowed");');
+            lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
+            lines.push(`      await expect(error.config.method).toBe('${otherMethod.toLowerCase()}');`);
+            lines.push('    }');
+            lines.push('  });');
+            lines.push('');
+        }
+    }
+    // Тест 6: С пользователем без прав (403)
+    if (config.generate403Tests && method.hasAuth) {
+        lines.push(`  test(\`\${httpMethod} с пользователем без прав (\${apiErrorCodes.forbidden}) @api @negative\`, async ({ page }, testInfo) => {`);
+        const axiosCallNoRights = generateSimpleAxiosCall(method, true, false, 'configApiHeaderNoRights');
+        lines.push(`    try {`);
+        lines.push(`      await ${axiosCallNoRights};`);
+        lines.push(`      throw new Error('Ожидалась ошибка 403, но запрос прошел успешно');`);
+        lines.push(`    } catch (error: any) {`);
+        lines.push(`      const errorMessage = getMessageFromError(error);`);
+        lines.push('      ');
+        lines.push('      await expect(error.response.status, errorMessage).toBe(apiErrorCodes.forbidden);');
+        lines.push('      await expect(error.response.statusText).toBe("Forbidden");');
+        lines.push('      await expect(error.code).toBe("ERR_BAD_REQUEST");');
+        lines.push('    }');
+        lines.push('  });');
+        lines.push('');
+    }
+    // Тест 7: 404 для несуществующего ресурса
+    if (config.generate404Tests && hasIdParams) {
+        lines.push(`  test(\`\${httpMethod} с несуществующим ID (\${apiErrorCodes.notFound}) @api @negative\`, async ({ page }, testInfo) => {`);
+        // Переопределяем ID на несуществующий
+        for (const param of pathParams) {
+            lines.push(`    const ${param}NotFound = 999999999;`);
+        }
+        const notFoundEndpoint = method.path;
+        let endpointWith404 = notFoundEndpoint;
+        for (const param of pathParams) {
+            endpointWith404 = endpointWith404.replace(`{${param}}`, `\${${param}NotFound}`);
+        }
+        lines.push(`    const endpoint404 = \`${endpointWith404}\`;`);
+        const axiosCall404 = generateSimpleAxiosCall(method, true, false, 'configApiHeaderAdmin', 'endpoint404');
+        lines.push(`    try {`);
+        lines.push(`      await ${axiosCall404};`);
+        lines.push(`      throw new Error('Ожидалась ошибка 404, но запрос прошел успешно');`);
+        lines.push(`    } catch (error: any) {`);
+        lines.push(`      const errorMessage = getMessageFromError(error);`);
+        lines.push('      ');
+        lines.push('      await expect(error.response.status, errorMessage).toBe(apiErrorCodes.notFound);');
+        lines.push('      await expect(error.response.statusText).toBe("Not Found");');
+        lines.push('    }');
+        lines.push('  });');
+        lines.push('');
+    }
+    lines.push('});');
+    lines.push('');
+    return lines.join('\n');
+}
+/**
+ * НОВОЕ v14.0: Генерирует содержимое ПОЗИТИВНОГО теста для метода
+ */
+async function generatePositiveTestForMethod(method, config) {
+    const lines = [];
+    // НОВОЕ v13.0: Получаем данные из Happy Path тестов
+    let happyPathData = [];
+    if (config.useHappyPathData && config.dbConnection) {
+        console.log(`    📊 Получение Happy Path данных для ${method.name}...`);
+        try {
+            happyPathData = await (0, happy_path_data_fetcher_1.fetchHappyPathData)(method.path, method.httpMethod, {
+                dbConnection: config.dbConnection,
+                dbSchema: config.dbSchema,
+                samplesCount: config.happyPathSamplesCount
+            });
+        }
+        catch (error) {
+            console.warn(`    ⚠️  Ошибка получения Happy Path данных: ${error.message}`);
+        }
+    }
+    // Проверяем наличие файла с данными
+    const testDataDir = path.join(config.outputDir, method.category || '', 'testData');
+    const testDataFileName = method.name + '.data.ts';
+    const testDataFilePath = path.join(testDataDir, testDataFileName);
+    const hasTestData = fs.existsSync(testDataFilePath) || happyPathData.length > 0;
+    // НОВОЕ v13.0: Создаем файл с данными если есть Happy Path данные
+    if (happyPathData.length > 0) {
+        const categoryDir = method.category ? path.join(config.outputDir, method.category) : config.outputDir;
+        createHappyPathDataFile(method.name, happyPathData, categoryDir);
+    }
+    // Импорты
+    lines.push(`import test, { expect } from '${config.baseTestPath}';`);
+    lines.push("import axios from 'axios';");
+    lines.push(`import { configApiHeaderAdmin } from '${config.axiosHelpersPath}';`);
+    lines.push(`import { getMessageFromResponse } from '${config.apiTestHelperPath || '../../../helpers/apiTestHelper'}';`);
+    // Добавляем импорт данных если файл существует
+    if (hasTestData) {
+        lines.push(`import { dbTestData } from './testData/${method.name}.data';`);
+    }
+    lines.push('');
+    // Извлекаем ID параметры из пути
+    const pathParams = extractPathParams(method.path);
+    const hasIdParams = pathParams.length > 0;
+    // Если есть ID параметры, объявляем их заранее
+    if (hasIdParams) {
+        lines.push('// ID параметры для endpoint');
+        for (const param of pathParams) {
+            lines.push(`const ${param} = 1; // TODO: заменить на актуальный ID`);
+        }
+        lines.push('');
+    }
+    // Endpoint с подстановкой ID
+    let endpointValue = method.path;
+    if (hasIdParams) {
+        for (const param of pathParams) {
+            endpointValue = endpointValue.replace(`{${param}}`, `\${${param}}`);
+        }
+        lines.push(`const endpoint = \`${endpointValue}\`;`);
+    }
+    else {
+        lines.push(`const endpoint = '${endpointValue}';`);
+    }
+    lines.push(`const httpMethod = '${method.httpMethod}';`);
+    lines.push('');
+    // Код успеха
+    lines.push('// Код успешного ответа');
+    lines.push(`const success = ${getSuccessCode(method) === 'apiErrorCodes.created' ? '201' : '200'};`);
+    lines.push('');
+    // Case Info
+    lines.push('// Информация о тест-кейсе');
+    lines.push('const caseInfoObj = {');
+    lines.push(`  testCase: 'T${Math.floor(Math.random() * 10000)}',`);
+    lines.push("  aqaOwner: 'AutoGenerated',");
+    lines.push(`  tms_testName: '${method.httpMethod} ${method.path}',`);
+    lines.push("  testType: 'api'");
+    lines.push('};');
+    lines.push('');
+    // Test suite
+    lines.push('test.describe.configure({ mode: "parallel" });');
+    lines.push(`test.describe(\`API ПОЗИТИВНЫЕ тесты для \${httpMethod} >> \${endpoint}\`, async () => {`);
+    lines.push('');
+    if (method.bodySchema && method.bodySchema.fields.length > 0) {
+        // Генерируем тестовые данные (используем dbTestData если доступно)
+        const testDataSection = generateTestDataSectionWithDb(method.bodySchema, hasTestData ? `./testData/${method.name}.data` : null);
+        lines.push(testDataSection);
+        lines.push('');
+        const requiredFields = method.bodySchema.fields.filter(f => f.required);
+        const hasRequiredFields = requiredFields.length > 0;
+        if (config.generateRequiredFieldsTest && hasRequiredFields) {
+            // Тест 1: Только обязательные поля
+            lines.push(`  test(\`\${httpMethod} с обязательными полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+            lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, requiredFieldsOnly, configApiHeaderAdmin);');
+            lines.push('');
+            lines.push('    const successMessage = getMessageFromResponse(response);');
+            lines.push('    await expect(response.status, successMessage).toBe(success);');
+            lines.push('    await expect(response.data).toBeDefined();');
+            lines.push('    // TODO: Добавить проверки обязательных полей в response');
+            lines.push('  });');
+            lines.push('');
+        }
+        if (config.generateAllFieldsTest) {
+            // Тест 2: Все поля
+            lines.push(`  test(\`\${httpMethod} со всеми полями (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+            lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, allFieldsFilled, configApiHeaderAdmin);');
+            lines.push('');
+            lines.push('    const successMessage = getMessageFromResponse(response);');
+            lines.push('    await expect(response.status, successMessage).toBe(success);');
+            lines.push('    await expect(response.data).toBeDefined();');
+            lines.push('    // TODO: Добавить проверки всех полей в response');
+            lines.push('  });');
+            lines.push('');
+        }
+    }
+    else if (hasBodyParam(method)) {
+        // Есть body параметр, но нет DTO - создаем базовый тест с пустым объектом
+        lines.push('  // DTO для данного метода не найдено, создаем базовый позитивный тест');
+        lines.push('');
+        lines.push(`  test(\`\${httpMethod} успешный запрос (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+        lines.push('    const testData = {}; // TODO: заполнить актуальными данными');
+        lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, testData, configApiHeaderAdmin);');
+        lines.push('');
+        lines.push('    const successMessage = getMessageFromResponse(response);');
+        lines.push('    await expect(response.status, successMessage).toBe(success);');
+        lines.push('    await expect(response.data).toBeDefined();');
+        lines.push('  });');
+        lines.push('');
+    }
+    else {
+        // Для GET/DELETE без body
+        lines.push(`  test(\`\${httpMethod} успешный запрос (\${success}) @api @positive\`, async ({ page }, testInfo) => {`);
+        const axiosCallSuccess = generateSimpleAxiosCall(method, true);
+        lines.push(`    const response = await ${axiosCallSuccess};`);
+        lines.push('');
+        lines.push('    const successMessage = getMessageFromResponse(response);');
+        lines.push('    await expect(response.status, successMessage).toBe(success);');
+        lines.push('    await expect(response.data).toBeDefined();');
+        lines.push('  });');
+        lines.push('');
+    }
+    lines.push('});');
+    lines.push('');
+    return lines.join('\n');
+}
+/**
+ * НОВОЕ v14.0: Генерирует содержимое PAIRWISE теста для метода
+ */
+async function generatePairwiseTestForMethod(method, config) {
+    const lines = [];
+    // НОВОЕ v13.0: Получаем данные из Happy Path тестов
+    let happyPathData = [];
+    if (config.useHappyPathData && config.dbConnection) {
+        console.log(`    📊 Получение Happy Path данных для ${method.name}...`);
+        try {
+            happyPathData = await (0, happy_path_data_fetcher_1.fetchHappyPathData)(method.path, method.httpMethod, {
+                dbConnection: config.dbConnection,
+                dbSchema: config.dbSchema,
+                samplesCount: config.happyPathSamplesCount
+            });
+        }
+        catch (error) {
+            console.warn(`    ⚠️  Ошибка получения Happy Path данных: ${error.message}`);
+        }
+    }
+    // Проверяем наличие файла с данными
+    const testDataDir = path.join(config.outputDir, method.category || '', 'testData');
+    const testDataFileName = method.name + '.data.ts';
+    const testDataFilePath = path.join(testDataDir, testDataFileName);
+    const hasTestData = fs.existsSync(testDataFilePath) || happyPathData.length > 0;
+    // НОВОЕ v13.0: Создаем файл с данными если есть Happy Path данные
+    if (happyPathData.length > 0) {
+        const categoryDir = method.category ? path.join(config.outputDir, method.category) : config.outputDir;
+        createHappyPathDataFile(method.name, happyPathData, categoryDir);
+    }
+    // Импорты
+    lines.push(`import test, { expect } from '${config.baseTestPath}';`);
+    lines.push("import axios from 'axios';");
+    lines.push(`import { configApiHeaderAdmin } from '${config.axiosHelpersPath}';`);
+    lines.push(`import { getMessageFromResponse } from '${config.apiTestHelperPath || '../../../helpers/apiTestHelper'}';`);
+    // Добавляем импорт данных если файл существует
+    if (hasTestData) {
+        lines.push(`import { dbTestData } from './testData/${method.name}.data';`);
+    }
+    lines.push('');
+    // Извлекаем ID параметры из пути
+    const pathParams = extractPathParams(method.path);
+    const hasIdParams = pathParams.length > 0;
+    // Если есть ID параметры, объявляем их заранее
+    if (hasIdParams) {
+        lines.push('// ID параметры для endpoint');
+        for (const param of pathParams) {
+            lines.push(`const ${param} = 1; // TODO: заменить на актуальный ID`);
+        }
+        lines.push('');
+    }
+    // Endpoint с подстановкой ID
+    let endpointValue = method.path;
+    if (hasIdParams) {
+        for (const param of pathParams) {
+            endpointValue = endpointValue.replace(`{${param}}`, `\${${param}}`);
+        }
+        lines.push(`const endpoint = \`${endpointValue}\`;`);
+    }
+    else {
+        lines.push(`const endpoint = '${endpointValue}';`);
+    }
+    lines.push(`const httpMethod = '${method.httpMethod}';`);
+    lines.push('');
+    // Код успеха
+    lines.push('// Код успешного ответа');
+    lines.push(`const success = ${getSuccessCode(method) === 'apiErrorCodes.created' ? '201' : '200'};`);
+    lines.push('');
+    // Case Info
+    lines.push('// Информация о тест-кейсе');
+    lines.push('const caseInfoObj = {');
+    lines.push(`  testCase: 'T${Math.floor(Math.random() * 10000)}',`);
+    lines.push("  aqaOwner: 'AutoGenerated',");
+    lines.push(`  tms_testName: '${method.httpMethod} ${method.path}',`);
+    lines.push("  testType: 'api'");
+    lines.push('};');
+    lines.push('');
+    // Test suite
+    lines.push('test.describe.configure({ mode: "parallel" });');
+    lines.push(`test.describe(\`API PAIRWISE тесты для \${httpMethod} >> \${endpoint}\`, async () => {`);
+    lines.push('');
+    if (method.bodySchema && method.bodySchema.fields.length > 0) {
+        // Генерируем pairwise тестовые данные (используем dbTestData если доступно)
+        const pairwiseDataSection = generatePairwiseTestDataSectionWithDb(method.bodySchema, hasTestData ? `./testData/${method.name}.data` : null);
+        lines.push(pairwiseDataSection);
+        lines.push('');
+        const requiredFields = method.bodySchema.fields.filter(f => f.required);
+        const optionalFields = method.bodySchema.fields.filter(f => !f.required);
+        const enumFields = method.bodySchema.fields.filter(f => f.enumValues && f.enumValues.length > 0);
+        // Тип 1: Комбинации необязательных полей
+        if (config.generateOptionalCombinations && optionalFields.length > 0) {
+            lines.push('  // Тип 1: Комбинации необязательных полей');
+            lines.push('');
+            const combinations = generateOptionalFieldsCombinations(optionalFields);
+            const maxCombos = Math.min(combinations.length, config.maxPairwiseCombinations || 10);
+            combinations.slice(0, maxCombos).forEach((combo, index) => {
+                lines.push(`  test(\`\${httpMethod} pairwise комбинация ${index + 1} (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+                lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseCombo${index + 1}, configApiHeaderAdmin);`);
+                lines.push('');
+                lines.push('    const successMessage = getMessageFromResponse(response);');
+                lines.push('    await expect(response.status, successMessage).toBe(success);');
+                lines.push('    await expect(response.data).toBeDefined();');
+                lines.push('  });');
+                lines.push('');
+            });
+        }
+        // Тип 2: Различные значения enum полей
+        if (config.generateEnumTests && enumFields.length > 0) {
+            lines.push('  // Тип 2: Различные значения enum полей');
+            lines.push('');
+            enumFields.forEach(field => {
+                field.enumValues?.forEach((enumValue, index) => {
+                    lines.push(`  test(\`\${httpMethod} с ${field.name}='${enumValue}' (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+                    lines.push(`    const response = await axios.${method.httpMethod.toLowerCase()}(process.env.StandURL + endpoint, pairwiseEnum_${field.name}_${index + 1}, configApiHeaderAdmin);`);
+                    lines.push('');
+                    lines.push('    const successMessage = getMessageFromResponse(response);');
+                    lines.push('    await expect(response.status, successMessage).toBe(success);');
+                    lines.push('    await expect(response.data).toBeDefined();');
+                    lines.push('  });');
+                    lines.push('');
+                });
+            });
+        }
+        if (optionalFields.length === 0 && enumFields.length === 0) {
+            lines.push('  // У данного endpoint нет необязательных или enum полей для pairwise тестов');
+            lines.push('');
+        }
+    }
+    else {
+        // Нет DTO - создаем базовые pairwise тесты
+        lines.push('  // DTO для данного метода не найдено');
+        lines.push('  // Создаем базовые pairwise тесты с различными наборами данных');
+        lines.push('');
+        // Генерируем несколько вариантов с разными данными
+        for (let i = 1; i <= 3; i++) {
+            lines.push(`  test(\`\${httpMethod} pairwise вариант ${i} (\${success}) @api @pairwise\`, async ({ page }, testInfo) => {`);
+            lines.push(`    const testData = {}; // TODO: заполнить вариант ${i} данных`);
+            lines.push('    const response = await axios.' + method.httpMethod.toLowerCase() + '(process.env.StandURL + endpoint, testData, configApiHeaderAdmin);');
+            lines.push('');
+            lines.push('    const successMessage = getMessageFromResponse(response);');
+            lines.push('    await expect(response.status, successMessage).toBe(success);');
+            lines.push('    await expect(response.data).toBeDefined();');
+            lines.push('  });');
+            lines.push('');
+        }
+    }
+    lines.push('});');
+    lines.push('');
+    return lines.join('\n');
 }
 /**
  * Генерирует содержимое теста для метода

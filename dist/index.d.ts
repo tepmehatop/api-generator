@@ -1,4 +1,4 @@
-export { generateApiTests, ApiTestConfig } from './test-generator';
+export { generateApiTests, ApiTestConfig, generateNegativeTests, generatePositiveTests, generatePairwiseTests, NegativeTestConfig, PositiveTestConfig, PairwiseTestConfig, BaseTestConfig } from './test-generator';
 export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';
 export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator } from './happy-path-generator';
 export { setupApiCollector, sendCollectedData, createCollector, collectApiData, CollectorConfig, ApiRequestData } from './test-collector';
