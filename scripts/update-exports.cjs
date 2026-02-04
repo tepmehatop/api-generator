@@ -67,6 +67,11 @@ const packageExports = {
   ".": {
     "types": "./dist/index.d.ts",
     "default": "./dist/index.js"
+  },
+  // НОВОЕ v14.0: Wildcard export для всех файлов из dist/
+  "./dist/*": {
+    "types": "./dist/*.d.ts",
+    "default": "./dist/*.js"
   }
 };
 
