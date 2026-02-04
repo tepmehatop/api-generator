@@ -1,2 +1,16 @@
 /.idea/
 /.chat-backups/
+
+# Личные данные и скрипты
+CHAT_CONTEXT_EXPORT.md
+auto-commit.sh
+*.local.sh
+*.personal.*
+
+# Системные файлы
+.DS_Store
+**/.DS_Store
+
+# Node modules
+node_modules/
+package-lock.json
