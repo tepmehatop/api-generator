@@ -34,55 +34,356 @@ import { validateRequests } from './utils/data-validation';
 import axios from 'axios';
 
 export interface HappyPathTestConfig {
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ОСНОВНЫЕ ПАРАМЕТРЫ
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Папка для выгрузки сгенерированных тестов
+   * @example './e2e/api/happy-path'
+   */
   outputDir: string;
-  dbConnectionMethod: string;
+
+  /**
+   * НОВОЕ v14.0: Группировать тесты по категориям в подпапки
+   * Категория определяется из пути endpoint: /api/v1/orders/place -> orders/
+   * Если true - тесты будут лежать в outputDir/orders/, outputDir/users/ и т.д.
+   * @default true
+   */
+  groupByCategory?: boolean;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ПОДКЛЮЧЕНИЯ К БАЗАМ ДАННЫХ
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * @deprecated Используйте dbDataConnection вместо этого
+   * Имя метода подключения к БД (для обратной совместимости)
+   */
+  dbConnectionMethod?: string;
+
+  /**
+   * НОВОЕ v14.0: Подключение к БД где хранятся собранные API запросы
+   * Используется для чтения таблицы api_requests из которой генерируются тесты
+   *
+   * @example
+   * // В вашем проекте:
+   * import postgres from 'postgres';
+   * export const sqlDataGenConn = postgres({ host: 'data-gen-db.example.com', ... });
+   *
+   * // В конфиге:
+   * dbDataConnection: sqlDataGenConn
+   */
+  dbDataConnection?: any;
+
+  /**
+   * НОВОЕ v14.0: Схема БД для api_requests (где хранятся собранные запросы)
+   * @default 'qa'
+   * @example 'qa' -> таблица qa.api_requests
+   */
+  dbDataSchema?: string;
+
+  /**
+   * НОВОЕ v14.0: Подключение к БД тестового стенда
+   * Используется для валидации данных - проверки что данные в БД стенда актуальны
+   * Это ДРУГАЯ база данных, отличная от dbDataConnection
+   *
+   * @example
+   * // В вашем проекте:
+   * import postgres from 'postgres';
+   * export const sqlStandConn = postgres({ host: 'test-stand-db.example.com', ... });
+   *
+   * // В конфиге:
+   * dbStandConnection: sqlStandConn
+   */
+  dbStandConnection?: any;
+
+  /**
+   * НОВОЕ v14.0: Схема БД тестового стенда для валидации
+   * @default 'public'
+   * @example 'orders' -> таблицы orders.*, users.* и т.д.
+   */
+  dbStandSchema?: string;
+
+  /**
+   * @deprecated Используйте dbDataSchema вместо этого
+   */
   dbSchema?: string;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ФИЛЬТРЫ ЭНДПОИНТОВ И МЕТОДОВ
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Генерировать тесты ТОЛЬКО для указанных эндпоинтов (белый список)
+   * Если пустой - генерируются тесты для всех эндпоинтов
+   * @example ['/api/v1/orders', '/api/v1/users']
+   */
   endpointFilter?: string[];
+
+  /**
+   * НОВОЕ v14.0: НЕ генерировать тесты для указанных эндпоинтов (черный список)
+   * Исключает эндпоинты из генерации даже если они попадают в endpointFilter
+   * @example ['/api/v1/internal', '/api/v1/admin', '/api/v1/debug']
+   */
+  excludeEndpoints?: string[];
+
+  /**
+   * Генерировать тесты ТОЛЬКО для указанных HTTP методов (белый список)
+   * @example ['GET', 'POST'] - только GET и POST запросы
+   */
   methodFilter?: string[];
+
+  /**
+   * НОВОЕ v14.0: НЕ генерировать тесты для указанных HTTP методов (черный список)
+   * @example ['DELETE', 'PATCH'] - исключить DELETE и PATCH из генерации
+   */
+  excludeMethods?: string[];
+
+  /**
+   * Максимальное количество тестов на один эндпоинт
+   * @default 5
+   */
   maxTestsPerEndpoint?: number;
+
+  /**
+   * Генерировать тесты только для успешных запросов (2xx)
+   * @default true
+   */
   onlySuccessful?: boolean;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // НАСТРОЙКИ ТЕСТОВ
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Тег для сгенерированных тестов
+   * @default '@apiHappyPath'
+   * @example '@apiHappyPath @smoke'
+   */
   testTag?: string;
+
+  /**
+   * Принудительная перегенерация всех тестов (игнорировать существующие)
+   * @default false
+   */
   force?: boolean;
 
+  /**
+   * Переменная окружения с URL тестового стенда
+   * @default 'StandURL'
+   * @example 'TEST_STAND_URL' -> process.env.TEST_STAND_URL
+   */
   standUrlEnvVar?: string;
+
+  /**
+   * Имя конфига axios для авторизации (экспортируется из axiosConfigPath)
+   * @default 'configApiHeaderAdmin'
+   * @example 'configApiHeaderAdmin' -> { headers: { Authorization: 'Bearer ...' } }
+   */
   axiosConfigName?: string;
+
+  /**
+   * Путь к файлу с axios конфигами (относительно тестового файла)
+   * @default '../../../helpers/axiosHelpers'
+   */
   axiosConfigPath?: string;
+
+  /**
+   * НОВОЕ v14.0: Путь к apiTestHelper для детализации ошибок
+   * При падении теста выводит детальный response с готовым curl запросом
+   * @default '../../../helpers/apiTestHelper'
+   * @example '../../../helpers/apiTestHelper' -> import { getMessageFromError } from '...'
+   */
+  apiTestHelperPath?: string;
+
+  /**
+   * Путь к сгенерированным API методам (для поиска DTO)
+   * @example './src/generated-api'
+   */
   apiGeneratedPath?: string;
+
+  /**
+   * Создавать отдельные файлы с тестовыми данными
+   * Если true - данные выносятся в папку test-data/
+   * @default false
+   */
   createSeparateDataFiles?: boolean;
+
+  /**
+   * Объединять дубликаты тестов (одинаковые эндпоинты)
+   * @default true
+   */
   mergeDuplicateTests?: boolean;
 
-  // НОВОЕ: Откуда импортировать test и expect
-  testImportPath?: string; // По умолчанию '@playwright/test'
+  /**
+   * Путь для импорта test и expect (фреймворк тестирования)
+   * @default '@playwright/test'
+   * @example '../../../fixtures/baseTest' - для кастомных fixtures
+   */
+  testImportPath?: string;
 
-  // НОВОЕ: Название NPM пакета для импорта утилит
-  packageName?: string; // По умолчанию '@your-company/api-codegen'
+  /**
+   * Название NPM пакета для импорта утилит (compareDbWithResponse и т.д.)
+   * @default Читается из package.json или '@your-company/api-codegen'
+   */
+  packageName?: string;
 
-  // НОВОЕ v12.0: Дедупликация тестов
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ДЕДУПЛИКАЦИЯ ТЕСТОВ (v12.0)
+  // ═══════════════════════════════════════════════════════════════════════════
+  /**
+   * Настройки дедупликации тестов
+   *
+   * ЗАЧЕМ ЭТО НУЖНО:
+   * При сборе API запросов часто получаем много похожих запросов к одному эндпоинту.
+   * Например, 100 запросов GET /api/v1/orders/{id} с разными id.
+   * Генерировать 100 тестов бессмысленно - достаточно 2-3 уникальных случая.
+   *
+   * КАК РАБОТАЕТ:
+   * 1. Группирует запросы по эндпоинту и методу
+   * 2. Сравнивает структуру response (игнорируя id, timestamps)
+   * 3. Выбирает уникальные случаи (разные status, type, пустые массивы)
+   * 4. Оставляет максимум maxTestsPerEndpoint тестов
+   */
   deduplication?: {
-    enabled?: boolean; // По умолчанию true
-    ignoreFields?: string[]; // Поля которые игнорируем при сравнении (id, *_id, created_at и т.д.)
-    significantFields?: string[]; // Поля которые важны (status, type, role и т.д.)
-    detectEdgeCases?: boolean; // Обнаруживать edge cases (пустые массивы, null и т.д.)
-    maxTestsPerEndpoint?: number; // Максимум тестов на эндпоинт (перегружает основной maxTestsPerEndpoint)
-    preserveTaggedTests?: string[]; // Теги которые защищают тест от удаления ([KEEP], [IMPORTANT])
+    /**
+     * Включить дедупликацию
+     * @default true
+     */
+    enabled?: boolean;
+
+    /**
+     * Поля которые ИГНОРИРУЮТСЯ при сравнении уникальности
+     * Поддерживает wildcard: '*_id' матчит 'user_id', 'order_id' и т.д.
+     * @default ['id', '*_id', 'created_at', 'updated_at', 'modified_at', 'deleted_at', 'timestamp', '*_timestamp', 'uuid', 'guid']
+     *
+     * ПРИМЕР: Два запроса с разными id считаются одинаковыми:
+     * { id: 1, status: 'active' } == { id: 2, status: 'active' }
+     */
+    ignoreFields?: string[];
+
+    /**
+     * Поля которые ВАЖНЫ для определения уникальности
+     * Если эти поля отличаются - запросы считаются уникальными
+     * @default ['status', 'state', 'type', 'role', 'category', 'kind']
+     *
+     * ПРИМЕР: Два запроса с разным status - это разные тест-кейсы:
+     * { status: 'active' } != { status: 'deleted' }
+     */
+    significantFields?: string[];
+
+    /**
+     * Обнаруживать edge cases (граничные случаи)
+     * Автоматически выделяет тесты с: пустыми массивами, null, 0, пустыми строками
+     * @default true
+     *
+     * ПРИМЕР: Если есть запросы с items: [] и items: [...] - оба будут сохранены
+     */
+    detectEdgeCases?: boolean;
+
+    /**
+     * Максимум тестов на один эндпоинт (после дедупликации)
+     * @default 2
+     */
+    maxTestsPerEndpoint?: number;
+
+    /**
+     * Теги в названии теста которые защищают от удаления при дедупликации
+     * Тесты с этими тегами всегда сохраняются
+     * @default ['[KEEP]', '[IMPORTANT]']
+     *
+     * ПРИМЕР: test('GET /orders [KEEP] - специальный случай', ...) - не удалится
+     */
+    preserveTaggedTests?: string[];
   };
 
-  // НОВОЕ v12.0: Валидация данных (проверка актуальности)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ВАЛИДАЦИЯ ДАННЫХ (v12.0)
+  // ═══════════════════════════════════════════════════════════════════════════
+  /**
+   * Настройки валидации актуальности данных
+   *
+   * ЗАЧЕМ ЭТО НУЖНО:
+   * Собранные API запросы могут устареть - данные в БД стенда изменились.
+   * Например, заказ был в статусе 'pending', а теперь 'completed'.
+   * Тест с ожиданием 'pending' будет падать.
+   *
+   * КАК РАБОТАЕТ:
+   * 1. Перед генерацией отправляет запрос на реальный стенд
+   * 2. Сравнивает ответ с сохраненным в api_requests
+   * 3. Если данные изменились - применяет стратегию (update/skip/delete)
+   */
   dataValidation?: {
-    enabled?: boolean; // По умолчанию true
-    validateBeforeGeneration?: boolean; // Проверять актуальность данных перед генерацией
-    onStaleData?: 'update' | 'skip' | 'delete'; // Что делать с устаревшими данными
-    staleIfChanged?: string[]; // Какие поля определяют что данные устарели (status, state и т.д.)
-    allowChanges?: string[]; // Какие изменения допустимы (timestamps, даты)
-    validateInDatabase?: boolean; // Проверять данные в БД стенда
-    standUrl?: string; // URL стенда для валидации (по умолчанию process.env[standUrlEnvVar])
-    axiosConfig?: any; // Конфиг axios для валидации
-    logChanges?: boolean; // Логировать изменения данных
-    logPath?: string; // Путь для логов
+    /**
+     * Включить валидацию данных
+     * @default true
+     */
+    enabled?: boolean;
+
+    /**
+     * Проверять актуальность данных ПЕРЕД генерацией теста
+     * Отправляет реальный запрос и сравнивает с сохраненным response
+     * @default true
+     */
+    validateBeforeGeneration?: boolean;
+
+    /**
+     * Что делать с устаревшими данными:
+     * - 'update': Обновить response в api_requests актуальными данными
+     * - 'skip': Пропустить генерацию теста для этого запроса
+     * - 'delete': Удалить запрос из api_requests
+     * @default 'delete'
+     */
+    onStaleData?: 'update' | 'skip' | 'delete';
+
+    /**
+     * Поля которые определяют что данные устарели
+     * Если эти поля изменились - данные считаются устаревшими
+     * @default ['status', 'state', 'type', 'role', 'category']
+     *
+     * ПРИМЕР: Если status изменился с 'pending' на 'completed' - данные устарели
+     */
+    staleIfChanged?: string[];
+
+    /**
+     * Изменения каких полей ДОПУСТИМЫ (не считаются устареванием)
+     * Поддерживает wildcard: '*_at' матчит 'created_at', 'updated_at'
+     * @default ['updated_at', 'modified_at', '*_timestamp', '*_at']
+     *
+     * ПРИМЕР: Изменение updated_at не делает данные устаревшими
+     */
+    allowChanges?: string[];
+
+    /**
+     * Дополнительно проверять данные в БД тестового стенда
+     * Требует настроенный dbStandConnection
+     * @default false
+     */
+    validateInDatabase?: boolean;
+
+    /**
+     * Логировать все обнаруженные изменения данных
+     * @default true
+     */
+    logChanges?: boolean;
+
+    /**
+     * Путь для сохранения логов валидации
+     * @default './happy-path-validation-logs'
+     */
+    logPath?: string;
   };
 
-  // НОВОЕ v13.0: Debug режим
-  debug?: boolean; // Детальное логирование для отладки (default: false)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ОТЛАДКА
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Включить детальное логирование для отладки
+   * @default false
+   */
+  debug?: boolean;
 }
 
 interface UniqueRequest {
@@ -318,11 +619,73 @@ async function findAndLoadAxiosConfig(
   return null;
 }
 
+/**
+ * НОВОЕ v14.0: Определяет категорию из пути endpoint
+ * /api/v1/orders/place -> orders
+ * /api/v2/users/{id}/profile -> users
+ * /api/v1/finance/reports/summary -> finance
+ */
+function getCategoryFromEndpoint(endpoint: string): string {
+  // Стратегия 1: Извлекаем из пути после /api/v1/ или /api/v2/
+  // /api/v1/orders/place -> orders
+  const versionedMatch = endpoint.match(/^\/api\/v\d+\/([^/]+)/);
+  if (versionedMatch) {
+    return versionedMatch[1].toLowerCase();
+  }
+
+  // Стратегия 2: Извлекаем из пути после /api/ (без версии)
+  // /api/orders/search -> orders
+  const simpleMatch = endpoint.match(/^\/api\/([^/]+)/);
+  if (simpleMatch && !simpleMatch[1].match(/^v\d+$/)) {
+    return simpleMatch[1].toLowerCase();
+  }
+
+  // Стратегия 3: Первый значимый сегмент пути
+  const segments = endpoint.split('/').filter(s => s && !s.match(/^(api|v\d+|\{[^}]+\})$/));
+  if (segments.length > 0) {
+    return segments[0].toLowerCase();
+  }
+
+  return 'other';
+}
+
+/**
+ * НОВОЕ v14.0: Проверяет нужно ли исключить endpoint
+ */
+function shouldExcludeEndpoint(endpoint: string, excludePatterns: string[]): boolean {
+  if (!excludePatterns || excludePatterns.length === 0) return false;
+
+  for (const pattern of excludePatterns) {
+    // Поддержка wildcard: /api/v1/internal/* матчит /api/v1/internal/anything
+    if (pattern.endsWith('*')) {
+      const prefix = pattern.slice(0, -1);
+      if (endpoint.startsWith(prefix)) return true;
+    } else if (endpoint === pattern || endpoint.startsWith(pattern + '/')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * НОВОЕ v14.0: Проверяет нужно ли исключить HTTP метод
+ */
+function shouldExcludeMethod(method: string, excludeMethods: string[]): boolean {
+  if (!excludeMethods || excludeMethods.length === 0) return false;
+  return excludeMethods.map(m => m.toUpperCase()).includes(method.toUpperCase());
+}
+
 export class HappyPathTestGenerator {
-  private sql: any;
+  private sql: any; // Подключение к БД с api_requests (для генерации)
+  private sqlStand: any; // Подключение к БД тестового стенда (для валидации)
   private config: Required<HappyPathTestConfig>;
 
-  constructor(config: HappyPathTestConfig, sqlConnection: any) {
+  /**
+   * @param config - Конфигурация генератора
+   * @param sqlConnection - Подключение к БД для ОБРАТНОЙ СОВМЕСТИМОСТИ
+   *                        Предпочтительнее использовать config.dbDataConnection и config.dbStandConnection
+   */
+  constructor(config: HappyPathTestConfig, sqlConnection?: any) {
     // Читаем package.json для получения названия пакета
     let defaultPackageName = '@your-company/api-codegen';
     try {
@@ -336,22 +699,36 @@ export class HappyPathTestGenerator {
     }
 
     this.config = {
+      // Основные параметры
       endpointFilter: [],
       methodFilter: [],
+      excludeEndpoints: [], // НОВОЕ v14.0
+      excludeMethods: [], // НОВОЕ v14.0
       maxTestsPerEndpoint: 5,
       onlySuccessful: true,
       testTag: '@apiHappyPath',
       force: false,
-      dbSchema: 'qa',
+      groupByCategory: true, // НОВОЕ v14.0: Группировка по категориям
+
+      // Подключения к БД
+      dbSchema: 'qa', // deprecated
+      dbDataSchema: 'qa', // НОВОЕ v14.0
+      dbStandSchema: 'public', // НОВОЕ v14.0
+      dbConnectionMethod: '', // deprecated
+      dbDataConnection: undefined, // НОВОЕ v14.0
+      dbStandConnection: undefined, // НОВОЕ v14.0
+
+      // Настройки тестов
       standUrlEnvVar: 'StandURL',
       axiosConfigName: 'configApiHeaderAdmin',
       axiosConfigPath: '../../../helpers/axiosHelpers',
+      apiTestHelperPath: '../../../helpers/apiTestHelper', // НОВОЕ v14.0
       apiGeneratedPath: '',
       createSeparateDataFiles: false,
       mergeDuplicateTests: true,
-      testImportPath: '@playwright/test', // ИСПРАВЛЕНИЕ 1
-      packageName: defaultPackageName, // ИСПРАВЛЕНИЕ 11: Автоматически из package.json
-      debug: false, // НОВОЕ v13.0: Debug режим по умолчанию выключен
+      testImportPath: '@playwright/test',
+      packageName: defaultPackageName,
+      debug: false,
       ...config,
 
       // НОВОЕ v12.0: Дефолтные настройки дедупликации
@@ -373,15 +750,26 @@ export class HappyPathTestGenerator {
         staleIfChanged: ['status', 'state', 'type', 'role', 'category'],
         allowChanges: ['updated_at', 'modified_at', '*_timestamp', '*_at'],
         validateInDatabase: false, // По умолчанию выключено (нужна настройка)
-        standUrl: undefined,
-        axiosConfig: undefined,
         logChanges: true,
         logPath: './happy-path-validation-logs',
         ...(config.dataValidation || {})
       }
     };
 
-    this.sql = sqlConnection;
+    // НОВОЕ v14.0: Поддержка двух подключений к БД
+    // Приоритет: config.dbDataConnection > sqlConnection (для обратной совместимости)
+    this.sql = config.dbDataConnection || sqlConnection;
+
+    // Подключение к БД стенда для валидации (опционально)
+    this.sqlStand = config.dbStandConnection || null;
+
+    if (!this.sql) {
+      console.warn('⚠️  Подключение к БД не настроено! Передайте sqlConnection или config.dbDataConnection');
+    }
+
+    if (this.config.dataValidation.validateInDatabase && !this.sqlStand) {
+      console.warn('⚠️  validateInDatabase=true, но dbStandConnection не настроен');
+    }
   }
 
   async generate(): Promise<void> {
@@ -472,9 +860,10 @@ export class HappyPathTestGenerator {
         }
 
         // Обновляем конфиг валидации с правильными настройками
+        // НОВОЕ v14.0: Используем основные настройки axios из конфига (без дублирования)
         const validationConfig = {
           ...this.config.dataValidation,
-          standUrl: standUrl || this.config.dataValidation.standUrl,
+          standUrl: standUrl,
           axiosConfig: axiosConfigObject
         };
 
@@ -637,7 +1026,30 @@ export class HappyPathTestGenerator {
       `;
     }
 
-    return requests as UniqueRequest[];
+    // НОВОЕ v14.0: Фильтрация по excludeEndpoints и excludeMethods
+    let filteredRequests = requests as UniqueRequest[];
+
+    if (this.config.excludeEndpoints.length > 0) {
+      const beforeCount = filteredRequests.length;
+      filteredRequests = filteredRequests.filter(
+        r => !shouldExcludeEndpoint(r.endpoint, this.config.excludeEndpoints)
+      );
+      if (filteredRequests.length !== beforeCount) {
+        console.log(`  🚫 Исключено по excludeEndpoints: ${beforeCount - filteredRequests.length} запросов`);
+      }
+    }
+
+    if (this.config.excludeMethods.length > 0) {
+      const beforeCount = filteredRequests.length;
+      filteredRequests = filteredRequests.filter(
+        r => !shouldExcludeMethod(r.method, this.config.excludeMethods)
+      );
+      if (filteredRequests.length !== beforeCount) {
+        console.log(`  🚫 Исключено по excludeMethods: ${beforeCount - filteredRequests.length} запросов`);
+      }
+    }
+
+    return filteredRequests;
   }
 
   private async generateTestsForEndpoint(
@@ -659,7 +1071,14 @@ export class HappyPathTestGenerator {
 
     const fileName = this.endpointToFileName(endpoint, method);
 
-    const filePath = path.join(this.config.outputDir, `${fileName}.happy-path.test.ts`);
+    // НОВОЕ v14.0: Группировка по категориям
+    let outputDir = this.config.outputDir;
+    if (this.config.groupByCategory) {
+      const category = getCategoryFromEndpoint(endpoint);
+      outputDir = path.join(this.config.outputDir, category);
+    }
+
+    const filePath = path.join(outputDir, `${fileName}.happy-path.test.ts`);
     const fileExists = fs.existsSync(filePath);
 
     let existingTests: string[] = [];
@@ -680,18 +1099,19 @@ export class HappyPathTestGenerator {
       await this.appendTestsToFile(filePath, endpoint, method, requests);
       console.log(`  ✓ ${fileName}.happy-path.test.ts (+${requests.length})`);
     } else {
+      // НОВОЕ v14.0: Создаем папку с категорией
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+
       if (this.config.createSeparateDataFiles) {
-        const dataDir = path.join(this.config.outputDir, 'test-data');
+        const dataDir = path.join(outputDir, 'test-data');
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });
         }
       }
 
       const testCode = await this.generateTestFile(endpoint, method, requests);
-
-      if (!fs.existsSync(this.config.outputDir)) {
-        fs.mkdirSync(this.config.outputDir, { recursive: true });
-      }
 
       fs.writeFileSync(filePath, testCode, 'utf-8');
       newTestsAdded = requests.length;
@@ -764,6 +1184,11 @@ export class HappyPathTestGenerator {
     // Импорт axios конфига
     if (this.config.axiosConfigPath && this.config.axiosConfigName) {
       imports.push(`import { ${this.config.axiosConfigName} } from '${this.config.axiosConfigPath}';`);
+    }
+
+    // НОВОЕ v14.0: Импорт apiTestHelper для детализации ошибок
+    if (this.config.apiTestHelperPath) {
+      imports.push(`import { getMessageFromError } from '${this.config.apiTestHelperPath}';`);
     }
 
     // ИСПРАВЛЕНИЕ 10: Импорт DTO
@@ -942,6 +1367,9 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 `;
     }
 
+    // НОВОЕ v14.0: Детальный вывод ошибки через apiTestHelper
+    const useApiTestHelper = this.config.apiTestHelperPath ? true : false;
+
     testCode += `    } catch (error: any) {
       console.error('❌ Ошибка при вызове endpoint:');
       console.error('Endpoint template:', endpoint);
@@ -954,12 +1382,25 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 `;
     }
 
-    testCode += `      console.error('Response status:', error.response?.status);
+    // НОВОЕ v14.0: Используем getMessageFromError для детализации
+    if (useApiTestHelper) {
+      testCode += `
+      // Детальный вывод через apiTestHelper (можно скопировать curl для повторения в Postman)
+      const errorMessage = getMessageFromError(error);
+      console.error(errorMessage);
+      throw error;
+    }
+`;
+    } else {
+      testCode += `      console.error('Response status:', error.response?.status);
       console.error('Response data:', JSON.stringify(error.response?.data, null, 2));
       console.error('Error message:', error.message);
       throw error;
     }
-    
+`;
+    }
+
+    testCode += `
     // Основные проверки
     await expect(response.status).toBe(success);
     await expect(response.data).toBeDefined();

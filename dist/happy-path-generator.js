@@ -263,7 +263,65 @@ async function findAndLoadAxiosConfig(configPath, configName, debug = false) {
     }
     return null;
 }
+/**
+ * НОВОЕ v14.0: Определяет категорию из пути endpoint
+ * /api/v1/orders/place -> orders
+ * /api/v2/users/{id}/profile -> users
+ * /api/v1/finance/reports/summary -> finance
+ */
+function getCategoryFromEndpoint(endpoint) {
+    // Стратегия 1: Извлекаем из пути после /api/v1/ или /api/v2/
+    // /api/v1/orders/place -> orders
+    const versionedMatch = endpoint.match(/^\/api\/v\d+\/([^/]+)/);
+    if (versionedMatch) {
+        return versionedMatch[1].toLowerCase();
+    }
+    // Стратегия 2: Извлекаем из пути после /api/ (без версии)
+    // /api/orders/search -> orders
+    const simpleMatch = endpoint.match(/^\/api\/([^/]+)/);
+    if (simpleMatch && !simpleMatch[1].match(/^v\d+$/)) {
+        return simpleMatch[1].toLowerCase();
+    }
+    // Стратегия 3: Первый значимый сегмент пути
+    const segments = endpoint.split('/').filter(s => s && !s.match(/^(api|v\d+|\{[^}]+\})$/));
+    if (segments.length > 0) {
+        return segments[0].toLowerCase();
+    }
+    return 'other';
+}
+/**
+ * НОВОЕ v14.0: Проверяет нужно ли исключить endpoint
+ */
+function shouldExcludeEndpoint(endpoint, excludePatterns) {
+    if (!excludePatterns || excludePatterns.length === 0)
+        return false;
+    for (const pattern of excludePatterns) {
+        // Поддержка wildcard: /api/v1/internal/* матчит /api/v1/internal/anything
+        if (pattern.endsWith('*')) {
+            const prefix = pattern.slice(0, -1);
+            if (endpoint.startsWith(prefix))
+                return true;
+        }
+        else if (endpoint === pattern || endpoint.startsWith(pattern + '/')) {
+            return true;
+        }
+    }
+    return false;
+}
+/**
+ * НОВОЕ v14.0: Проверяет нужно ли исключить HTTP метод
+ */
+function shouldExcludeMethod(method, excludeMethods) {
+    if (!excludeMethods || excludeMethods.length === 0)
+        return false;
+    return excludeMethods.map(m => m.toUpperCase()).includes(method.toUpperCase());
+}
 class HappyPathTestGenerator {
+    /**
+     * @param config - Конфигурация генератора
+     * @param sqlConnection - Подключение к БД для ОБРАТНОЙ СОВМЕСТИМОСТИ
+     *                        Предпочтительнее использовать config.dbDataConnection и config.dbStandConnection
+     */
     constructor(config, sqlConnection) {
         // Читаем package.json для получения названия пакета
         let defaultPackageName = '@your-company/api-codegen';
@@ -278,22 +336,34 @@ class HappyPathTestGenerator {
             console.warn('⚠️  Не удалось прочитать package.json, используется название по умолчанию');
         }
         this.config = {
+            // Основные параметры
             endpointFilter: [],
             methodFilter: [],
+            excludeEndpoints: [], // НОВОЕ v14.0
+            excludeMethods: [], // НОВОЕ v14.0
             maxTestsPerEndpoint: 5,
             onlySuccessful: true,
             testTag: '@apiHappyPath',
             force: false,
-            dbSchema: 'qa',
+            groupByCategory: true, // НОВОЕ v14.0: Группировка по категориям
+            // Подключения к БД
+            dbSchema: 'qa', // deprecated
+            dbDataSchema: 'qa', // НОВОЕ v14.0
+            dbStandSchema: 'public', // НОВОЕ v14.0
+            dbConnectionMethod: '', // deprecated
+            dbDataConnection: undefined, // НОВОЕ v14.0
+            dbStandConnection: undefined, // НОВОЕ v14.0
+            // Настройки тестов
             standUrlEnvVar: 'StandURL',
             axiosConfigName: 'configApiHeaderAdmin',
             axiosConfigPath: '../../../helpers/axiosHelpers',
+            apiTestHelperPath: '../../../helpers/apiTestHelper', // НОВОЕ v14.0
             apiGeneratedPath: '',
             createSeparateDataFiles: false,
             mergeDuplicateTests: true,
-            testImportPath: '@playwright/test', // ИСПРАВЛЕНИЕ 1
-            packageName: defaultPackageName, // ИСПРАВЛЕНИЕ 11: Автоматически из package.json
-            debug: false, // НОВОЕ v13.0: Debug режим по умолчанию выключен
+            testImportPath: '@playwright/test',
+            packageName: defaultPackageName,
+            debug: false,
             ...config,
             // НОВОЕ v12.0: Дефолтные настройки дедупликации
             deduplication: {
@@ -313,14 +383,22 @@ class HappyPathTestGenerator {
                 staleIfChanged: ['status', 'state', 'type', 'role', 'category'],
                 allowChanges: ['updated_at', 'modified_at', '*_timestamp', '*_at'],
                 validateInDatabase: false, // По умолчанию выключено (нужна настройка)
-                standUrl: undefined,
-                axiosConfig: undefined,
                 logChanges: true,
                 logPath: './happy-path-validation-logs',
                 ...(config.dataValidation || {})
             }
         };
-        this.sql = sqlConnection;
+        // НОВОЕ v14.0: Поддержка двух подключений к БД
+        // Приоритет: config.dbDataConnection > sqlConnection (для обратной совместимости)
+        this.sql = config.dbDataConnection || sqlConnection;
+        // Подключение к БД стенда для валидации (опционально)
+        this.sqlStand = config.dbStandConnection || null;
+        if (!this.sql) {
+            console.warn('⚠️  Подключение к БД не настроено! Передайте sqlConnection или config.dbDataConnection');
+        }
+        if (this.config.dataValidation.validateInDatabase && !this.sqlStand) {
+            console.warn('⚠️  validateInDatabase=true, но dbStandConnection не настроен');
+        }
     }
     async generate() {
         console.log('🔍 Подключаюсь к БД и собираю данные...');
@@ -395,9 +473,10 @@ class HappyPathTestGenerator {
                     console.log(`🐛 Stand URL: ${standUrl}`);
                 }
                 // Обновляем конфиг валидации с правильными настройками
+                // НОВОЕ v14.0: Используем основные настройки axios из конфига (без дублирования)
                 const validationConfig = {
                     ...this.config.dataValidation,
-                    standUrl: standUrl || this.config.dataValidation.standUrl,
+                    standUrl: standUrl,
                     axiosConfig: axiosConfigObject
                 };
                 if (this.config.debug) {
@@ -531,7 +610,23 @@ class HappyPathTestGenerator {
         ORDER BY endpoint, method, request_body::text, created_at DESC
       `;
         }
-        return requests;
+        // НОВОЕ v14.0: Фильтрация по excludeEndpoints и excludeMethods
+        let filteredRequests = requests;
+        if (this.config.excludeEndpoints.length > 0) {
+            const beforeCount = filteredRequests.length;
+            filteredRequests = filteredRequests.filter(r => !shouldExcludeEndpoint(r.endpoint, this.config.excludeEndpoints));
+            if (filteredRequests.length !== beforeCount) {
+                console.log(`  🚫 Исключено по excludeEndpoints: ${beforeCount - filteredRequests.length} запросов`);
+            }
+        }
+        if (this.config.excludeMethods.length > 0) {
+            const beforeCount = filteredRequests.length;
+            filteredRequests = filteredRequests.filter(r => !shouldExcludeMethod(r.method, this.config.excludeMethods));
+            if (filteredRequests.length !== beforeCount) {
+                console.log(`  🚫 Исключено по excludeMethods: ${beforeCount - filteredRequests.length} запросов`);
+            }
+        }
+        return filteredRequests;
     }
     async generateTestsForEndpoint(endpointKey, requests) {
         const [method, endpoint] = endpointKey.split(':');
@@ -545,7 +640,13 @@ class HappyPathTestGenerator {
             }
         }
         const fileName = this.endpointToFileName(endpoint, method);
-        const filePath = path.join(this.config.outputDir, `${fileName}.happy-path.test.ts`);
+        // НОВОЕ v14.0: Группировка по категориям
+        let outputDir = this.config.outputDir;
+        if (this.config.groupByCategory) {
+            const category = getCategoryFromEndpoint(endpoint);
+            outputDir = path.join(this.config.outputDir, category);
+        }
+        const filePath = path.join(outputDir, `${fileName}.happy-path.test.ts`);
         const fileExists = fs.existsSync(filePath);
         let existingTests = [];
         let newTestsAdded = 0;
@@ -562,16 +663,17 @@ class HappyPathTestGenerator {
             console.log(`  ✓ ${fileName}.happy-path.test.ts (+${requests.length})`);
         }
         else {
+            // НОВОЕ v14.0: Создаем папку с категорией
+            if (!fs.existsSync(outputDir)) {
+                fs.mkdirSync(outputDir, { recursive: true });
+            }
             if (this.config.createSeparateDataFiles) {
-                const dataDir = path.join(this.config.outputDir, 'test-data');
+                const dataDir = path.join(outputDir, 'test-data');
                 if (!fs.existsSync(dataDir)) {
                     fs.mkdirSync(dataDir, { recursive: true });
                 }
             }
             const testCode = await this.generateTestFile(endpoint, method, requests);
-            if (!fs.existsSync(this.config.outputDir)) {
-                fs.mkdirSync(this.config.outputDir, { recursive: true });
-            }
             fs.writeFileSync(filePath, testCode, 'utf-8');
             newTestsAdded = requests.length;
             const mode = this.config.force ? '🔄' : '✨';
@@ -622,6 +724,10 @@ class HappyPathTestGenerator {
         // Импорт axios конфига
         if (this.config.axiosConfigPath && this.config.axiosConfigName) {
             imports.push(`import { ${this.config.axiosConfigName} } from '${this.config.axiosConfigPath}';`);
+        }
+        // НОВОЕ v14.0: Импорт apiTestHelper для детализации ошибок
+        if (this.config.apiTestHelperPath) {
+            imports.push(`import { getMessageFromError } from '${this.config.apiTestHelperPath}';`);
         }
         // ИСПРАВЛЕНИЕ 10: Импорт DTO
         if (dtoInfo) {
@@ -769,6 +875,8 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
             testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
 `;
         }
+        // НОВОЕ v14.0: Детальный вывод ошибки через apiTestHelper
+        const useApiTestHelper = this.config.apiTestHelperPath ? true : false;
         testCode += `    } catch (error: any) {
       console.error('❌ Ошибка при вызове endpoint:');
       console.error('Endpoint template:', endpoint);
@@ -779,12 +887,25 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
             testCode += `      console.error('Request:', JSON.stringify(requestData, null, 2));
 `;
         }
-        testCode += `      console.error('Response status:', error.response?.status);
+        // НОВОЕ v14.0: Используем getMessageFromError для детализации
+        if (useApiTestHelper) {
+            testCode += `
+      // Детальный вывод через apiTestHelper (можно скопировать curl для повторения в Postman)
+      const errorMessage = getMessageFromError(error);
+      console.error(errorMessage);
+      throw error;
+    }
+`;
+        }
+        else {
+            testCode += `      console.error('Response status:', error.response?.status);
       console.error('Response data:', JSON.stringify(error.response?.data, null, 2));
       console.error('Error message:', error.message);
       throw error;
     }
-    
+`;
+        }
+        testCode += `
     // Основные проверки
     await expect(response.status).toBe(success);
     await expect(response.data).toBeDefined();
