@@ -1111,7 +1111,7 @@ export class HappyPathTestGenerator {
         }
       }
 
-      const testCode = await this.generateTestFile(endpoint, method, requests);
+      const testCode = await this.generateTestFile(endpoint, method, requests, outputDir);
 
       fs.writeFileSync(filePath, testCode, 'utf-8');
       newTestsAdded = requests.length;
@@ -1162,8 +1162,12 @@ export class HappyPathTestGenerator {
 
   /**
    * Генерирует полный файл теста
+   * @param endpoint - Эндпоинт API
+   * @param method - HTTP метод
+   * @param requests - Массив запросов
+   * @param outputDir - Папка для тестов (с учётом категории если groupByCategory: true)
    */
-  private async generateTestFile(endpoint: string, method: string, requests: UniqueRequest[]): Promise<string> {
+  private async generateTestFile(endpoint: string, method: string, requests: UniqueRequest[], outputDir: string): Promise<string> {
     // Ищем DTO
     let dtoInfo: DTOInfo | null = null;
 
@@ -1192,8 +1196,9 @@ export class HappyPathTestGenerator {
     }
 
     // ИСПРАВЛЕНИЕ 10: Импорт DTO
+    // ИСПРАВЛЕНИЕ v14.1: Используем переданный outputDir для корректного относительного пути
     if (dtoInfo) {
-      const dtoImportPath = this.getRelativePath(this.config.outputDir, dtoInfo.filePath);
+      const dtoImportPath = this.getRelativePath(outputDir, dtoInfo.filePath);
       imports.push(`import type { ${dtoInfo.name} } from '${dtoImportPath}';`);
     }
 
@@ -1211,8 +1216,9 @@ export class HappyPathTestGenerator {
     );
 
     // ИСПРАВЛЕНИЕ 9: Создаем файлы с нормализованными данными
+    // ИСПРАВЛЕНИЕ v14.1: Передаём outputDir с учётом категории
     if (this.config.createSeparateDataFiles) {
-      await this.createDataFiles(endpoint, method, requests, dtoInfo);
+      await this.createDataFiles(endpoint, method, requests, dtoInfo, outputDir);
     }
 
     // ИСПРАВЛЕНИЕ 3: Рандомный номер
@@ -1255,15 +1261,18 @@ ${tests.join('\n\n')}
 
   /**
    * ИСПРАВЛЕНИЕ 9: Создает файлы с НОРМАЛИЗОВАННЫМИ данными на основе DTO
+   * ИСПРАВЛЕНИЕ v14.1: Добавлен параметр outputDir для корректной работы с groupByCategory
    */
   private async createDataFiles(
       endpoint: string,
       method: string,
       requests: UniqueRequest[],
-      dtoInfo: DTOInfo | null
+      dtoInfo: DTOInfo | null,
+      outputDir: string
   ): Promise<void> {
     const fileName = this.endpointToFileName(endpoint, method);
-    const dataDir = path.join(this.config.outputDir, 'test-data');
+    // ИСПРАВЛЕНИЕ v14.1: Используем переданный outputDir вместо this.config.outputDir
+    const dataDir = path.join(outputDir, 'test-data');
 
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
