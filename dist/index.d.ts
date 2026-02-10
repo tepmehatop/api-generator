@@ -1,6 +1,6 @@
 export { generateApiTests, ApiTestConfig, generateNegativeTests, generatePositiveTests, generatePairwiseTests, NegativeTestConfig, PositiveTestConfig, PairwiseTestConfig, BaseTestConfig } from './test-generator';
 export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';
-export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator } from './happy-path-generator';
+export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator, reActualizeHappyPathTests, ReActualizeConfig, ReActualizeResult } from './happy-path-generator';
 export { setupApiCollector, sendCollectedData, createCollector, collectApiData, CollectorConfig, ApiRequestData } from './test-collector';
 export { normalizeDbData, convertDataTypes, deepCompareObjects, compareDbWithResponse } from './utils/data-comparison';
 export { generateTypeValidationCode, FieldSchema } from './utils/type-validator';

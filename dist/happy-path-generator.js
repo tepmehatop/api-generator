@@ -59,6 +59,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HappyPathTestGenerator = void 0;
 exports.generateHappyPathTests = generateHappyPathTests;
+exports.reActualizeHappyPathTests = reActualizeHappyPathTests;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const dto_finder_1 = require("./utils/dto-finder");
@@ -358,6 +359,9 @@ class HappyPathTestGenerator {
             axiosConfigName: 'configApiHeaderAdmin',
             axiosConfigPath: '../../../helpers/axiosHelpers',
             apiTestHelperPath: '../../../helpers/apiTestHelper', // НОВОЕ v14.0
+            emailHelperPath: '', // НОВОЕ v14.1
+            emailHelperMethodName: 'sendErrorMailbyApi', // НОВОЕ v14.1
+            send5xxEmailNotification: false, // НОВОЕ v14.1
             apiGeneratedPath: '',
             createSeparateDataFiles: false,
             mergeDuplicateTests: true,
@@ -673,7 +677,7 @@ class HappyPathTestGenerator {
                     fs.mkdirSync(dataDir, { recursive: true });
                 }
             }
-            const testCode = await this.generateTestFile(endpoint, method, requests);
+            const testCode = await this.generateTestFile(endpoint, method, requests, outputDir);
             fs.writeFileSync(filePath, testCode, 'utf-8');
             newTestsAdded = requests.length;
             const mode = this.config.force ? '🔄' : '✨';
@@ -706,8 +710,12 @@ class HappyPathTestGenerator {
     }
     /**
      * Генерирует полный файл теста
+     * @param endpoint - Эндпоинт API
+     * @param method - HTTP метод
+     * @param requests - Массив запросов
+     * @param outputDir - Папка для тестов (с учётом категории если groupByCategory: true)
      */
-    async generateTestFile(endpoint, method, requests) {
+    async generateTestFile(endpoint, method, requests, outputDir) {
         // Ищем DTO
         let dtoInfo = null;
         if (this.config.apiGeneratedPath) {
@@ -729,9 +737,14 @@ class HappyPathTestGenerator {
         if (this.config.apiTestHelperPath) {
             imports.push(`import { getMessageFromError } from '${this.config.apiTestHelperPath}';`);
         }
+        // НОВОЕ v14.1: Импорт email хелпера для уведомлений о 5xx ошибках
+        if (this.config.send5xxEmailNotification && this.config.emailHelperPath) {
+            imports.push(`import { ${this.config.emailHelperMethodName} } from '${this.config.emailHelperPath}';`);
+        }
         // ИСПРАВЛЕНИЕ 10: Импорт DTO
+        // ИСПРАВЛЕНИЕ v14.1: Используем переданный outputDir для корректного относительного пути
         if (dtoInfo) {
-            const dtoImportPath = this.getRelativePath(this.config.outputDir, dtoInfo.filePath);
+            const dtoImportPath = this.getRelativePath(outputDir, dtoInfo.filePath);
             imports.push(`import type { ${dtoInfo.name} } from '${dtoImportPath}';`);
         }
         // ИСПРАВЛЕНИЕ 9: Импорты нормализованных данных
@@ -744,8 +757,9 @@ class HappyPathTestGenerator {
         // Генерируем тесты
         const tests = await Promise.all(requests.map((req, index) => this.generateSingleTest(endpoint, method, req, index + 1, dtoInfo)));
         // ИСПРАВЛЕНИЕ 9: Создаем файлы с нормализованными данными
+        // ИСПРАВЛЕНИЕ v14.1: Передаём outputDir с учётом категории
         if (this.config.createSeparateDataFiles) {
-            await this.createDataFiles(endpoint, method, requests, dtoInfo);
+            await this.createDataFiles(endpoint, method, requests, dtoInfo, outputDir);
         }
         // ИСПРАВЛЕНИЕ 3: Рандомный номер
         const randomId = Math.floor(Math.random() * 10000);
@@ -785,10 +799,12 @@ ${tests.join('\n\n')}
     }
     /**
      * ИСПРАВЛЕНИЕ 9: Создает файлы с НОРМАЛИЗОВАННЫМИ данными на основе DTO
+     * ИСПРАВЛЕНИЕ v14.1: Добавлен параметр outputDir для корректной работы с groupByCategory
      */
-    async createDataFiles(endpoint, method, requests, dtoInfo) {
+    async createDataFiles(endpoint, method, requests, dtoInfo, outputDir) {
         const fileName = this.endpointToFileName(endpoint, method);
-        const dataDir = path.join(this.config.outputDir, 'test-data');
+        // ИСПРАВЛЕНИЕ v14.1: Используем переданный outputDir вместо this.config.outputDir
+        const dataDir = path.join(outputDir, 'test-data');
         if (!fs.existsSync(dataDir)) {
             fs.mkdirSync(dataDir, { recursive: true });
         }
@@ -877,6 +893,8 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         }
         // НОВОЕ v14.0: Детальный вывод ошибки через apiTestHelper
         const useApiTestHelper = this.config.apiTestHelperPath ? true : false;
+        const use5xxEmailNotification = this.config.send5xxEmailNotification && this.config.emailHelperPath;
+        const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
         testCode += `    } catch (error: any) {
       console.error('❌ Ошибка при вызове endpoint:');
       console.error('Endpoint template:', endpoint);
@@ -885,6 +903,101 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 `;
         if (hasBody) {
             testCode += `      console.error('Request:', JSON.stringify(requestData, null, 2));
+`;
+        }
+        // НОВОЕ v14.1: Email уведомление при 5xx ошибках
+        if (use5xxEmailNotification) {
+            testCode += `
+      // НОВОЕ v14.1: Отправка email уведомления при 5xx ошибках
+      const errorStatus = error.response?.status;
+      if (errorStatus >= 500 && errorStatus <= 503) {
+        const moscowTime = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+        const testFilePath = testInfo.file || 'unknown';
+        const testTitle = testInfo.title || 'Unknown Test';
+`;
+            // Генерируем CURL для email
+            if (hasBody) {
+                testCode += `        const curlCommand = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Content-Type: application/json' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' \\\\
+  -d '\${JSON.stringify(requestData)}'\`;
+`;
+            }
+            else {
+                testCode += `        const curlCommand = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+`;
+            }
+            testCode += `
+        const emailHtml = \`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+    .container { background: white; border-radius: 8px; padding: 20px; max-width: 800px; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .header { background: #dc3545; color: white; padding: 15px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px; }
+    .header h1 { margin: 0; font-size: 20px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-weight: bold; color: #333; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    .info-row { display: flex; margin-bottom: 5px; }
+    .info-label { font-weight: bold; width: 150px; color: #666; }
+    .info-value { color: #333; }
+    .error-code { font-size: 48px; font-weight: bold; color: #dc3545; text-align: center; margin: 20px 0; }
+    .curl-block { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    .run-command { background: #28a745; color: white; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚨 API Test Failed - Server Error \${errorStatus}</h1>
+    </div>
+
+    <div class="error-code">\${errorStatus}</div>
+
+    <div class="section">
+      <div class="section-title">📋 Информация о тесте</div>
+      <div class="info-row"><span class="info-label">Название теста:</span><span class="info-value">\${testTitle}</span></div>
+      <div class="info-row"><span class="info-label">Файл теста:</span><span class="info-value">\${testFilePath}</span></div>
+      <div class="info-row"><span class="info-label">Время падения:</span><span class="info-value">\${moscowTime} (МСК)</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🌐 Информация о запросе</div>
+      <div class="info-row"><span class="info-label">Endpoint:</span><span class="info-value">\${actualEndpoint}</span></div>
+      <div class="info-row"><span class="info-label">HTTP метод:</span><span class="info-value">\${httpMethod}</span></div>
+      <div class="info-row"><span class="info-label">Полный URL:</span><span class="info-value">\${${standUrlVar}}\${actualEndpoint}</span></div>
+      <div class="info-row"><span class="info-label">Код ошибки:</span><span class="info-value">\${errorStatus}</span></div>
+      <div class="info-row"><span class="info-label">Статус ошибки:</span><span class="info-value">\${error.response?.statusText || 'Unknown'}</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">▶️ Команда для запуска теста</div>
+      <div class="run-command">npx playwright test "\${testFilePath}"</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📋 CURL для повторения запроса</div>
+      <div class="curl-block">\${curlCommand}</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📄 Response Data</div>
+      <div class="curl-block">\${JSON.stringify(error.response?.data, null, 2) || 'No response data'}</div>
+    </div>
+  </div>
+</body>
+</html>\`;
+
+        try {
+          await ${emailMethodName}(emailHtml);
+          console.log('📧 Email уведомление о 5xx ошибке отправлено');
+        } catch (emailError) {
+          console.error('❌ Не удалось отправить email:', emailError);
+        }
+      }
 `;
         }
         // НОВОЕ v14.0: Используем getMessageFromError для детализации
@@ -933,13 +1046,39 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         }
         // ИСПРАВЛЕНИЕ 5: Используем deepCompareObjects вместо toMatchObject
         // ИСПРАВЛЕНИЕ 13: Улучшенный вывод различий с цветами (блочный формат)
+        // НОВОЕ v14.1: При несовпадении выводим endpoint, метод и CURL для повторения
         testCode += `
     // Глубокое сравнение (учитывает порядок в массивах)
     const comparison = compareDbWithResponse(normalizedExpected, response.data);
 
     if (!comparison.isEqual) {
       console.log(formatDifferencesAsBlocks(comparison.differences));
-    }
+
+      // Дополнительная информация для отладки
+      console.log('\\n📍 Информация о запросе:');
+      console.log('Endpoint:', actualEndpoint);
+      console.log('Method:', httpMethod);
+      console.log('Full URL:', ${standUrlVar} + actualEndpoint);
+
+      // CURL команда для копирования (без рамки для удобства)
+      console.log('\\n📋 CURL для повторения запроса:');
+`;
+        // Генерируем CURL команду
+        if (hasBody) {
+            testCode += `      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Content-Type: application/json' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' \\\\
+  -d '\${JSON.stringify(requestData)}'\`;
+      console.log(curlCmd);
+`;
+        }
+        else {
+            testCode += `      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.log(curlCmd);
+`;
+        }
+        testCode += `    }
 
     await expect(comparison.isEqual).toBe(true);
   });`;
@@ -999,5 +1138,322 @@ exports.HappyPathTestGenerator = HappyPathTestGenerator;
 async function generateHappyPathTests(config, sqlConnection) {
     const generator = new HappyPathTestGenerator(config, sqlConnection);
     await generator.generate();
+}
+/**
+ * НОВОЕ v14.1: Переактуализация тестовых данных Happy Path тестов
+ *
+ * Этот метод:
+ * 1. Сканирует папку с тестами
+ * 2. Извлекает endpoint и тестовые данные из каждого теста
+ * 3. Вызывает endpoint на реальном стенде
+ * 4. Сравнивает полученные данные с ожидаемыми в тесте
+ * 5. Обновляет тестовые данные если есть различия
+ *
+ * @example
+ * await reActualizeHappyPathTests({
+ *   testsDir: './e2e/api/happy-path',
+ *   standUrl: 'https://api.example.com',
+ *   axiosConfig: { headers: { Authorization: 'Bearer xxx' } },
+ *   endpointFilter: ['/api/v1/orders'], // опционально
+ *   updateFiles: true
+ * });
+ */
+async function reActualizeHappyPathTests(config) {
+    const { testsDir, endpointFilter = [], standUrl, axiosConfig, updateFiles = true, debug = false } = config;
+    console.log('🔄 Начинаю переактуализацию тестовых данных...');
+    console.log(`📁 Папка с тестами: ${testsDir}`);
+    if (endpointFilter.length > 0) {
+        console.log(`🔍 Фильтр endpoints: ${endpointFilter.join(', ')}`);
+    }
+    else {
+        console.log('🔍 Актуализация ВСЕХ endpoints');
+    }
+    const result = {
+        totalTests: 0,
+        updatedTests: 0,
+        skippedTests: 0,
+        failedTests: 0,
+        details: []
+    };
+    // Проверяем существование папки
+    if (!fs.existsSync(testsDir)) {
+        console.error(`❌ Папка не найдена: ${testsDir}`);
+        return result;
+    }
+    // Получаем все тестовые файлы рекурсивно
+    const testFiles = getTestFilesRecursively(testsDir);
+    console.log(`📋 Найдено тестовых файлов: ${testFiles.length}`);
+    for (const testFile of testFiles) {
+        if (debug) {
+            console.log(`\n📄 Обработка: ${path.relative(testsDir, testFile)}`);
+        }
+        try {
+            const fileContent = fs.readFileSync(testFile, 'utf-8');
+            // Извлекаем информацию о тесте
+            const testInfo = extractTestInfo(fileContent);
+            if (!testInfo) {
+                if (debug) {
+                    console.log(`  ⚠️  Не удалось извлечь информацию о тесте`);
+                }
+                result.skippedTests++;
+                result.details.push({
+                    testFile,
+                    endpoint: 'unknown',
+                    method: 'unknown',
+                    status: 'skipped',
+                    reason: 'Could not extract test info'
+                });
+                continue;
+            }
+            result.totalTests++;
+            // Проверяем фильтр endpoints
+            if (endpointFilter.length > 0) {
+                const matchesFilter = endpointFilter.some(filter => {
+                    const normalizedFilter = filter.replace(/\{[^}]+\}/g, '{id}');
+                    const normalizedEndpoint = testInfo.endpoint.replace(/\{[^}]+\}/g, '{id}').replace(/\/\d+/g, '/{id}');
+                    return normalizedEndpoint.includes(normalizedFilter) || normalizedFilter.includes(normalizedEndpoint);
+                });
+                if (!matchesFilter) {
+                    if (debug) {
+                        console.log(`  ⏭️  Пропущен (не соответствует фильтру)`);
+                    }
+                    result.skippedTests++;
+                    result.details.push({
+                        testFile,
+                        endpoint: testInfo.endpoint,
+                        method: testInfo.method,
+                        status: 'skipped',
+                        reason: 'Does not match endpoint filter'
+                    });
+                    continue;
+                }
+            }
+            // Вызываем endpoint
+            console.log(`  🌐 ${testInfo.method} ${testInfo.endpoint}`);
+            try {
+                const fullUrl = standUrl + testInfo.endpoint;
+                let response;
+                if (['POST', 'PUT', 'PATCH'].includes(testInfo.method.toUpperCase())) {
+                    response = await (0, axios_1.default)({
+                        method: testInfo.method.toLowerCase(),
+                        url: fullUrl,
+                        data: testInfo.requestData,
+                        ...axiosConfig
+                    });
+                }
+                else {
+                    response = await (0, axios_1.default)({
+                        method: testInfo.method.toLowerCase(),
+                        url: fullUrl,
+                        ...axiosConfig
+                    });
+                }
+                // Сравниваем данные
+                const comparison = compareResponses(testInfo.expectedResponse, response.data);
+                if (comparison.isEqual) {
+                    console.log(`    ✅ Данные актуальны`);
+                    result.details.push({
+                        testFile,
+                        endpoint: testInfo.endpoint,
+                        method: testInfo.method,
+                        status: 'unchanged'
+                    });
+                }
+                else {
+                    console.log(`    🔄 Обнаружены изменения: ${comparison.changedFields.join(', ')}`);
+                    if (updateFiles) {
+                        // Обновляем файл
+                        const updatedContent = updateTestDataInFile(fileContent, response.data, testInfo);
+                        fs.writeFileSync(testFile, updatedContent, 'utf-8');
+                        console.log(`    ✅ Файл обновлён`);
+                        result.updatedTests++;
+                    }
+                    else {
+                        console.log(`    ℹ️  Обновление файла пропущено (updateFiles: false)`);
+                    }
+                    result.details.push({
+                        testFile,
+                        endpoint: testInfo.endpoint,
+                        method: testInfo.method,
+                        status: 'updated',
+                        changedFields: comparison.changedFields
+                    });
+                }
+            }
+            catch (apiError) {
+                const status = apiError.response?.status;
+                console.log(`    ❌ Ошибка API: ${status || apiError.message}`);
+                result.failedTests++;
+                result.details.push({
+                    testFile,
+                    endpoint: testInfo.endpoint,
+                    method: testInfo.method,
+                    status: 'failed',
+                    reason: `API error: ${status || apiError.message}`
+                });
+            }
+        }
+        catch (error) {
+            console.error(`  ❌ Ошибка обработки файла: ${error.message}`);
+            result.failedTests++;
+            result.details.push({
+                testFile,
+                endpoint: 'unknown',
+                method: 'unknown',
+                status: 'failed',
+                reason: error.message
+            });
+        }
+    }
+    // Итоговая статистика
+    console.log('\n📊 Результаты переактуализации:');
+    console.log(`   Всего тестов: ${result.totalTests}`);
+    console.log(`   Обновлено: ${result.updatedTests}`);
+    console.log(`   Пропущено: ${result.skippedTests}`);
+    console.log(`   Ошибок: ${result.failedTests}`);
+    return result;
+}
+/**
+ * Рекурсивно получает все .test.ts файлы из папки
+ */
+function getTestFilesRecursively(dir) {
+    const files = [];
+    if (!fs.existsSync(dir))
+        return files;
+    const items = fs.readdirSync(dir);
+    for (const item of items) {
+        const fullPath = path.join(dir, item);
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory() && !item.startsWith('.') && item !== 'node_modules' && item !== 'test-data') {
+            files.push(...getTestFilesRecursively(fullPath));
+        }
+        else if (stat.isFile() && item.endsWith('.happy-path.test.ts')) {
+            files.push(fullPath);
+        }
+    }
+    return files;
+}
+/**
+ * Извлекает информацию о тесте из содержимого файла
+ */
+function extractTestInfo(content) {
+    try {
+        // Извлекаем endpoint
+        const endpointMatch = content.match(/const endpoint = ['"`]([^'"`]+)['"`]/);
+        if (!endpointMatch)
+            return null;
+        // Извлекаем метод
+        const methodMatch = content.match(/const httpMethod = ['"`]([^'"`]+)['"`]/);
+        if (!methodMatch)
+            return null;
+        // Извлекаем actualEndpoint (реальный endpoint с подставленными ID)
+        const actualEndpointMatch = content.match(/const actualEndpoint = ['"`]([^'"`]+)['"`]/);
+        // Извлекаем requestData
+        let requestData = {};
+        const requestDataMatch = content.match(/const requestData = (\{[\s\S]*?\});/);
+        if (requestDataMatch) {
+            try {
+                // Пробуем распарсить как JSON-подобную структуру
+                const jsonLike = requestDataMatch[1]
+                    .replace(/'/g, '"')
+                    .replace(/(\w+):/g, '"$1":')
+                    .replace(/,\s*}/g, '}')
+                    .replace(/,\s*]/g, ']');
+                requestData = JSON.parse(jsonLike);
+            }
+            catch {
+                // Если не получилось, оставляем пустой объект
+            }
+        }
+        // Извлекаем normalizedExpected
+        let expectedResponse = {};
+        const normalizedMatch = content.match(/const normalizedExpected = (\{[\s\S]*?\});/);
+        if (normalizedMatch) {
+            try {
+                const jsonLike = normalizedMatch[1]
+                    .replace(/'/g, '"')
+                    .replace(/(\w+):/g, '"$1":')
+                    .replace(/,\s*}/g, '}')
+                    .replace(/,\s*]/g, ']');
+                expectedResponse = JSON.parse(jsonLike);
+            }
+            catch {
+                // Если не получилось, оставляем пустой объект
+            }
+        }
+        return {
+            endpoint: actualEndpointMatch ? actualEndpointMatch[1] : endpointMatch[1],
+            method: methodMatch[1],
+            requestData,
+            expectedResponse
+        };
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * Сравнивает два ответа и возвращает список изменённых полей
+ */
+function compareResponses(expected, actual) {
+    const changedFields = [];
+    function compare(exp, act, prefix = '') {
+        if (exp === null && act === null)
+            return;
+        if (exp === undefined && act === undefined)
+            return;
+        if (typeof exp !== typeof act) {
+            changedFields.push(prefix || 'root');
+            return;
+        }
+        if (Array.isArray(exp) && Array.isArray(act)) {
+            if (exp.length !== act.length) {
+                changedFields.push(`${prefix}[length]`);
+            }
+            for (let i = 0; i < Math.min(exp.length, act.length); i++) {
+                compare(exp[i], act[i], `${prefix}[${i}]`);
+            }
+            return;
+        }
+        if (typeof exp === 'object' && exp !== null) {
+            const allKeys = new Set([...Object.keys(exp || {}), ...Object.keys(act || {})]);
+            for (const key of allKeys) {
+                const newPrefix = prefix ? `${prefix}.${key}` : key;
+                if (!(key in exp)) {
+                    changedFields.push(`${newPrefix} (new)`);
+                }
+                else if (!(key in act)) {
+                    changedFields.push(`${newPrefix} (removed)`);
+                }
+                else {
+                    compare(exp[key], act[key], newPrefix);
+                }
+            }
+            return;
+        }
+        if (exp !== act) {
+            changedFields.push(prefix || 'root');
+        }
+    }
+    compare(expected, actual);
+    return {
+        isEqual: changedFields.length === 0,
+        changedFields
+    };
+}
+/**
+ * Обновляет тестовые данные в файле
+ */
+function updateTestDataInFile(content, newResponseData, testInfo) {
+    // Находим и заменяем normalizedExpected
+    const normalizedExpectedRegex = /(const normalizedExpected = )(\{[\s\S]*?\})(;)/;
+    if (normalizedExpectedRegex.test(content)) {
+        const formattedData = JSON.stringify(newResponseData, null, 4)
+            .split('\n')
+            .map((line, i) => i === 0 ? line : '    ' + line)
+            .join('\n');
+        return content.replace(normalizedExpectedRegex, `$1${formattedData}$3`);
+    }
+    return content;
 }
 //# sourceMappingURL=happy-path-generator.js.map

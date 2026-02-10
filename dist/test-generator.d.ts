@@ -100,6 +100,18 @@ export interface NegativeTestConfig extends BaseTestConfig {
      * @default true
      */
     generate405Tests?: boolean;
+    /**
+     * НОВОЕ v14.1: Глобально исключить методы из 405 проверок
+     * Эти HTTP методы НЕ будут использоваться для проверки 405 ошибки
+     *
+     * ЗАЧЕМ: Некоторые методы (например DELETE) опасны - могут удалить тестовые данные
+     * даже если для конкретного endpoint этот метод разрешён
+     *
+     * @example ['DELETE'] - никогда не вызывать DELETE для 405 проверок
+     * @example ['DELETE', 'PUT'] - никогда не вызывать DELETE и PUT
+     * @default []
+     */
+    exclude405Methods?: string[];
 }
 /**
  * НОВОЕ v14.0: Конфиг для позитивных тестов

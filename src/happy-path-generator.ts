@@ -198,6 +198,27 @@ export interface HappyPathTestConfig {
   apiTestHelperPath?: string;
 
   /**
+   * НОВОЕ v14.1: Путь к методу отправки email уведомлений о 5xx ошибках
+   * Метод должен принимать HTML-строку с телом письма
+   *
+   * @example '../../../helpers/mailHelper' -> import { sendErrorMailbyApi } from '...'
+   */
+  emailHelperPath?: string;
+
+  /**
+   * НОВОЕ v14.1: Имя метода для отправки email (экспортируется из emailHelperPath)
+   * @default 'sendErrorMailbyApi'
+   */
+  emailHelperMethodName?: string;
+
+  /**
+   * НОВОЕ v14.1: Отправлять email уведомления при 5xx ошибках (500, 501, 502, 503)
+   * Требует настроенный emailHelperPath
+   * @default false
+   */
+  send5xxEmailNotification?: boolean;
+
+  /**
    * Путь к сгенерированным API методам (для поиска DTO)
    * @example './src/generated-api'
    */
@@ -723,6 +744,9 @@ export class HappyPathTestGenerator {
       axiosConfigName: 'configApiHeaderAdmin',
       axiosConfigPath: '../../../helpers/axiosHelpers',
       apiTestHelperPath: '../../../helpers/apiTestHelper', // НОВОЕ v14.0
+      emailHelperPath: '', // НОВОЕ v14.1
+      emailHelperMethodName: 'sendErrorMailbyApi', // НОВОЕ v14.1
+      send5xxEmailNotification: false, // НОВОЕ v14.1
       apiGeneratedPath: '',
       createSeparateDataFiles: false,
       mergeDuplicateTests: true,
@@ -1195,6 +1219,11 @@ export class HappyPathTestGenerator {
       imports.push(`import { getMessageFromError } from '${this.config.apiTestHelperPath}';`);
     }
 
+    // НОВОЕ v14.1: Импорт email хелпера для уведомлений о 5xx ошибках
+    if (this.config.send5xxEmailNotification && this.config.emailHelperPath) {
+      imports.push(`import { ${this.config.emailHelperMethodName} } from '${this.config.emailHelperPath}';`);
+    }
+
     // ИСПРАВЛЕНИЕ 10: Импорт DTO
     // ИСПРАВЛЕНИЕ v14.1: Используем переданный outputDir для корректного относительного пути
     if (dtoInfo) {
@@ -1378,6 +1407,8 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 
     // НОВОЕ v14.0: Детальный вывод ошибки через apiTestHelper
     const useApiTestHelper = this.config.apiTestHelperPath ? true : false;
+    const use5xxEmailNotification = this.config.send5xxEmailNotification && this.config.emailHelperPath;
+    const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
 
     testCode += `    } catch (error: any) {
       console.error('❌ Ошибка при вызове endpoint:');
@@ -1388,6 +1419,103 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 
     if (hasBody) {
       testCode += `      console.error('Request:', JSON.stringify(requestData, null, 2));
+`;
+    }
+
+    // НОВОЕ v14.1: Email уведомление при 5xx ошибках
+    if (use5xxEmailNotification) {
+      testCode += `
+      // НОВОЕ v14.1: Отправка email уведомления при 5xx ошибках
+      const errorStatus = error.response?.status;
+      if (errorStatus >= 500 && errorStatus <= 503) {
+        const moscowTime = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+        const testFilePath = testInfo.file || 'unknown';
+        const testTitle = testInfo.title || 'Unknown Test';
+`;
+
+      // Генерируем CURL для email
+      if (hasBody) {
+        testCode += `        const curlCommand = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Content-Type: application/json' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' \\\\
+  -d '\${JSON.stringify(requestData)}'\`;
+`;
+      } else {
+        testCode += `        const curlCommand = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+`;
+      }
+
+      testCode += `
+        const emailHtml = \`
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+    .container { background: white; border-radius: 8px; padding: 20px; max-width: 800px; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .header { background: #dc3545; color: white; padding: 15px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px; }
+    .header h1 { margin: 0; font-size: 20px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-weight: bold; color: #333; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    .info-row { display: flex; margin-bottom: 5px; }
+    .info-label { font-weight: bold; width: 150px; color: #666; }
+    .info-value { color: #333; }
+    .error-code { font-size: 48px; font-weight: bold; color: #dc3545; text-align: center; margin: 20px 0; }
+    .curl-block { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    .run-command { background: #28a745; color: white; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚨 API Test Failed - Server Error \${errorStatus}</h1>
+    </div>
+
+    <div class="error-code">\${errorStatus}</div>
+
+    <div class="section">
+      <div class="section-title">📋 Информация о тесте</div>
+      <div class="info-row"><span class="info-label">Название теста:</span><span class="info-value">\${testTitle}</span></div>
+      <div class="info-row"><span class="info-label">Файл теста:</span><span class="info-value">\${testFilePath}</span></div>
+      <div class="info-row"><span class="info-label">Время падения:</span><span class="info-value">\${moscowTime} (МСК)</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🌐 Информация о запросе</div>
+      <div class="info-row"><span class="info-label">Endpoint:</span><span class="info-value">\${actualEndpoint}</span></div>
+      <div class="info-row"><span class="info-label">HTTP метод:</span><span class="info-value">\${httpMethod}</span></div>
+      <div class="info-row"><span class="info-label">Полный URL:</span><span class="info-value">\${${standUrlVar}}\${actualEndpoint}</span></div>
+      <div class="info-row"><span class="info-label">Код ошибки:</span><span class="info-value">\${errorStatus}</span></div>
+      <div class="info-row"><span class="info-label">Статус ошибки:</span><span class="info-value">\${error.response?.statusText || 'Unknown'}</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">▶️ Команда для запуска теста</div>
+      <div class="run-command">npx playwright test "\${testFilePath}"</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📋 CURL для повторения запроса</div>
+      <div class="curl-block">\${curlCommand}</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📄 Response Data</div>
+      <div class="curl-block">\${JSON.stringify(error.response?.data, null, 2) || 'No response data'}</div>
+    </div>
+  </div>
+</body>
+</html>\`;
+
+        try {
+          await ${emailMethodName}(emailHtml);
+          console.log('📧 Email уведомление о 5xx ошибке отправлено');
+        } catch (emailError) {
+          console.error('❌ Не удалось отправить email:', emailError);
+        }
+      }
 `;
     }
 
@@ -1542,4 +1670,438 @@ export async function generateHappyPathTests(
 ): Promise<void> {
   const generator = new HappyPathTestGenerator(config, sqlConnection);
   await generator.generate();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// НОВОЕ v14.1: ПЕРЕАКТУАЛИЗАЦИЯ ТЕСТОВЫХ ДАННЫХ
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Конфигурация для переактуализации тестовых данных
+ */
+export interface ReActualizeConfig {
+  /**
+   * Путь к папке со сгенерированными Happy Path тестами
+   * @example './e2e/api/happy-path'
+   */
+  testsDir: string;
+
+  /**
+   * Фильтр endpoints для актуализации
+   * Если пустой - актуализируются все endpoints
+   * @example ['/api/v1/orders', '/api/v1/users/{id}']
+   */
+  endpointFilter?: string[];
+
+  /**
+   * URL тестового стенда
+   * @example 'https://api.example.com'
+   */
+  standUrl: string;
+
+  /**
+   * Axios конфиг для авторизации
+   * @example { headers: { Authorization: 'Bearer xxx' } }
+   */
+  axiosConfig: any;
+
+  /**
+   * Обновлять тестовые данные в файлах
+   * Если false - только показывает что изменилось
+   * @default true
+   */
+  updateFiles?: boolean;
+
+  /**
+   * Включить детальное логирование
+   * @default false
+   */
+  debug?: boolean;
+}
+
+/**
+ * Результат переактуализации
+ */
+export interface ReActualizeResult {
+  totalTests: number;
+  updatedTests: number;
+  skippedTests: number;
+  failedTests: number;
+  details: Array<{
+    testFile: string;
+    endpoint: string;
+    method: string;
+    status: 'updated' | 'skipped' | 'failed' | 'unchanged';
+    reason?: string;
+    changedFields?: string[];
+  }>;
+}
+
+/**
+ * НОВОЕ v14.1: Переактуализация тестовых данных Happy Path тестов
+ *
+ * Этот метод:
+ * 1. Сканирует папку с тестами
+ * 2. Извлекает endpoint и тестовые данные из каждого теста
+ * 3. Вызывает endpoint на реальном стенде
+ * 4. Сравнивает полученные данные с ожидаемыми в тесте
+ * 5. Обновляет тестовые данные если есть различия
+ *
+ * @example
+ * await reActualizeHappyPathTests({
+ *   testsDir: './e2e/api/happy-path',
+ *   standUrl: 'https://api.example.com',
+ *   axiosConfig: { headers: { Authorization: 'Bearer xxx' } },
+ *   endpointFilter: ['/api/v1/orders'], // опционально
+ *   updateFiles: true
+ * });
+ */
+export async function reActualizeHappyPathTests(
+  config: ReActualizeConfig
+): Promise<ReActualizeResult> {
+  const {
+    testsDir,
+    endpointFilter = [],
+    standUrl,
+    axiosConfig,
+    updateFiles = true,
+    debug = false
+  } = config;
+
+  console.log('🔄 Начинаю переактуализацию тестовых данных...');
+  console.log(`📁 Папка с тестами: ${testsDir}`);
+
+  if (endpointFilter.length > 0) {
+    console.log(`🔍 Фильтр endpoints: ${endpointFilter.join(', ')}`);
+  } else {
+    console.log('🔍 Актуализация ВСЕХ endpoints');
+  }
+
+  const result: ReActualizeResult = {
+    totalTests: 0,
+    updatedTests: 0,
+    skippedTests: 0,
+    failedTests: 0,
+    details: []
+  };
+
+  // Проверяем существование папки
+  if (!fs.existsSync(testsDir)) {
+    console.error(`❌ Папка не найдена: ${testsDir}`);
+    return result;
+  }
+
+  // Получаем все тестовые файлы рекурсивно
+  const testFiles = getTestFilesRecursively(testsDir);
+  console.log(`📋 Найдено тестовых файлов: ${testFiles.length}`);
+
+  for (const testFile of testFiles) {
+    if (debug) {
+      console.log(`\n📄 Обработка: ${path.relative(testsDir, testFile)}`);
+    }
+
+    try {
+      const fileContent = fs.readFileSync(testFile, 'utf-8');
+
+      // Извлекаем информацию о тесте
+      const testInfo = extractTestInfo(fileContent);
+
+      if (!testInfo) {
+        if (debug) {
+          console.log(`  ⚠️  Не удалось извлечь информацию о тесте`);
+        }
+        result.skippedTests++;
+        result.details.push({
+          testFile,
+          endpoint: 'unknown',
+          method: 'unknown',
+          status: 'skipped',
+          reason: 'Could not extract test info'
+        });
+        continue;
+      }
+
+      result.totalTests++;
+
+      // Проверяем фильтр endpoints
+      if (endpointFilter.length > 0) {
+        const matchesFilter = endpointFilter.some(filter => {
+          const normalizedFilter = filter.replace(/\{[^}]+\}/g, '{id}');
+          const normalizedEndpoint = testInfo.endpoint.replace(/\{[^}]+\}/g, '{id}').replace(/\/\d+/g, '/{id}');
+          return normalizedEndpoint.includes(normalizedFilter) || normalizedFilter.includes(normalizedEndpoint);
+        });
+
+        if (!matchesFilter) {
+          if (debug) {
+            console.log(`  ⏭️  Пропущен (не соответствует фильтру)`);
+          }
+          result.skippedTests++;
+          result.details.push({
+            testFile,
+            endpoint: testInfo.endpoint,
+            method: testInfo.method,
+            status: 'skipped',
+            reason: 'Does not match endpoint filter'
+          });
+          continue;
+        }
+      }
+
+      // Вызываем endpoint
+      console.log(`  🌐 ${testInfo.method} ${testInfo.endpoint}`);
+
+      try {
+        const fullUrl = standUrl + testInfo.endpoint;
+        let response;
+
+        if (['POST', 'PUT', 'PATCH'].includes(testInfo.method.toUpperCase())) {
+          response = await axios({
+            method: testInfo.method.toLowerCase(),
+            url: fullUrl,
+            data: testInfo.requestData,
+            ...axiosConfig
+          });
+        } else {
+          response = await axios({
+            method: testInfo.method.toLowerCase(),
+            url: fullUrl,
+            ...axiosConfig
+          });
+        }
+
+        // Сравниваем данные
+        const comparison = compareResponses(testInfo.expectedResponse, response.data);
+
+        if (comparison.isEqual) {
+          console.log(`    ✅ Данные актуальны`);
+          result.details.push({
+            testFile,
+            endpoint: testInfo.endpoint,
+            method: testInfo.method,
+            status: 'unchanged'
+          });
+        } else {
+          console.log(`    🔄 Обнаружены изменения: ${comparison.changedFields.join(', ')}`);
+
+          if (updateFiles) {
+            // Обновляем файл
+            const updatedContent = updateTestDataInFile(fileContent, response.data, testInfo);
+            fs.writeFileSync(testFile, updatedContent, 'utf-8');
+            console.log(`    ✅ Файл обновлён`);
+            result.updatedTests++;
+          } else {
+            console.log(`    ℹ️  Обновление файла пропущено (updateFiles: false)`);
+          }
+
+          result.details.push({
+            testFile,
+            endpoint: testInfo.endpoint,
+            method: testInfo.method,
+            status: 'updated',
+            changedFields: comparison.changedFields
+          });
+        }
+
+      } catch (apiError: any) {
+        const status = apiError.response?.status;
+        console.log(`    ❌ Ошибка API: ${status || apiError.message}`);
+        result.failedTests++;
+        result.details.push({
+          testFile,
+          endpoint: testInfo.endpoint,
+          method: testInfo.method,
+          status: 'failed',
+          reason: `API error: ${status || apiError.message}`
+        });
+      }
+
+    } catch (error: any) {
+      console.error(`  ❌ Ошибка обработки файла: ${error.message}`);
+      result.failedTests++;
+      result.details.push({
+        testFile,
+        endpoint: 'unknown',
+        method: 'unknown',
+        status: 'failed',
+        reason: error.message
+      });
+    }
+  }
+
+  // Итоговая статистика
+  console.log('\n📊 Результаты переактуализации:');
+  console.log(`   Всего тестов: ${result.totalTests}`);
+  console.log(`   Обновлено: ${result.updatedTests}`);
+  console.log(`   Пропущено: ${result.skippedTests}`);
+  console.log(`   Ошибок: ${result.failedTests}`);
+
+  return result;
+}
+
+/**
+ * Рекурсивно получает все .test.ts файлы из папки
+ */
+function getTestFilesRecursively(dir: string): string[] {
+  const files: string[] = [];
+
+  if (!fs.existsSync(dir)) return files;
+
+  const items = fs.readdirSync(dir);
+
+  for (const item of items) {
+    const fullPath = path.join(dir, item);
+    const stat = fs.statSync(fullPath);
+
+    if (stat.isDirectory() && !item.startsWith('.') && item !== 'node_modules' && item !== 'test-data') {
+      files.push(...getTestFilesRecursively(fullPath));
+    } else if (stat.isFile() && item.endsWith('.happy-path.test.ts')) {
+      files.push(fullPath);
+    }
+  }
+
+  return files;
+}
+
+/**
+ * Извлекает информацию о тесте из содержимого файла
+ */
+function extractTestInfo(content: string): {
+  endpoint: string;
+  method: string;
+  requestData: any;
+  expectedResponse: any;
+} | null {
+  try {
+    // Извлекаем endpoint
+    const endpointMatch = content.match(/const endpoint = ['"`]([^'"`]+)['"`]/);
+    if (!endpointMatch) return null;
+
+    // Извлекаем метод
+    const methodMatch = content.match(/const httpMethod = ['"`]([^'"`]+)['"`]/);
+    if (!methodMatch) return null;
+
+    // Извлекаем actualEndpoint (реальный endpoint с подставленными ID)
+    const actualEndpointMatch = content.match(/const actualEndpoint = ['"`]([^'"`]+)['"`]/);
+
+    // Извлекаем requestData
+    let requestData = {};
+    const requestDataMatch = content.match(/const requestData = (\{[\s\S]*?\});/);
+    if (requestDataMatch) {
+      try {
+        // Пробуем распарсить как JSON-подобную структуру
+        const jsonLike = requestDataMatch[1]
+          .replace(/'/g, '"')
+          .replace(/(\w+):/g, '"$1":')
+          .replace(/,\s*}/g, '}')
+          .replace(/,\s*]/g, ']');
+        requestData = JSON.parse(jsonLike);
+      } catch {
+        // Если не получилось, оставляем пустой объект
+      }
+    }
+
+    // Извлекаем normalizedExpected
+    let expectedResponse = {};
+    const normalizedMatch = content.match(/const normalizedExpected = (\{[\s\S]*?\});/);
+    if (normalizedMatch) {
+      try {
+        const jsonLike = normalizedMatch[1]
+          .replace(/'/g, '"')
+          .replace(/(\w+):/g, '"$1":')
+          .replace(/,\s*}/g, '}')
+          .replace(/,\s*]/g, ']');
+        expectedResponse = JSON.parse(jsonLike);
+      } catch {
+        // Если не получилось, оставляем пустой объект
+      }
+    }
+
+    return {
+      endpoint: actualEndpointMatch ? actualEndpointMatch[1] : endpointMatch[1],
+      method: methodMatch[1],
+      requestData,
+      expectedResponse
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Сравнивает два ответа и возвращает список изменённых полей
+ */
+function compareResponses(expected: any, actual: any): {
+  isEqual: boolean;
+  changedFields: string[];
+} {
+  const changedFields: string[] = [];
+
+  function compare(exp: any, act: any, prefix: string = '') {
+    if (exp === null && act === null) return;
+    if (exp === undefined && act === undefined) return;
+
+    if (typeof exp !== typeof act) {
+      changedFields.push(prefix || 'root');
+      return;
+    }
+
+    if (Array.isArray(exp) && Array.isArray(act)) {
+      if (exp.length !== act.length) {
+        changedFields.push(`${prefix}[length]`);
+      }
+      for (let i = 0; i < Math.min(exp.length, act.length); i++) {
+        compare(exp[i], act[i], `${prefix}[${i}]`);
+      }
+      return;
+    }
+
+    if (typeof exp === 'object' && exp !== null) {
+      const allKeys = new Set([...Object.keys(exp || {}), ...Object.keys(act || {})]);
+      for (const key of allKeys) {
+        const newPrefix = prefix ? `${prefix}.${key}` : key;
+        if (!(key in exp)) {
+          changedFields.push(`${newPrefix} (new)`);
+        } else if (!(key in act)) {
+          changedFields.push(`${newPrefix} (removed)`);
+        } else {
+          compare(exp[key], act[key], newPrefix);
+        }
+      }
+      return;
+    }
+
+    if (exp !== act) {
+      changedFields.push(prefix || 'root');
+    }
+  }
+
+  compare(expected, actual);
+
+  return {
+    isEqual: changedFields.length === 0,
+    changedFields
+  };
+}
+
+/**
+ * Обновляет тестовые данные в файле
+ */
+function updateTestDataInFile(
+  content: string,
+  newResponseData: any,
+  testInfo: { endpoint: string; method: string }
+): string {
+  // Находим и заменяем normalizedExpected
+  const normalizedExpectedRegex = /(const normalizedExpected = )(\{[\s\S]*?\})(;)/;
+
+  if (normalizedExpectedRegex.test(content)) {
+    const formattedData = JSON.stringify(newResponseData, null, 4)
+      .split('\n')
+      .map((line, i) => i === 0 ? line : '    ' + line)
+      .join('\n');
+
+    return content.replace(normalizedExpectedRegex, `$1${formattedData}$3`);
+  }
+
+  return content;
 }

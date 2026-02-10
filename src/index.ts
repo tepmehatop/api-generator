@@ -23,7 +23,15 @@ export {
 export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-analyzer';
 
 // Экспорт генератора Happy Path тестов
-export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator } from './happy-path-generator';
+export {
+  generateHappyPathTests,
+  HappyPathTestConfig,
+  HappyPathTestGenerator,
+  // v14.1: Реактуализация тестовых данных
+  reActualizeHappyPathTests,
+  ReActualizeConfig,
+  ReActualizeResult
+} from './happy-path-generator';
 
 // Экспорт коллектора данных для UI тестов
 export { 

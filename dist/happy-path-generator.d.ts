@@ -148,6 +148,24 @@ export interface HappyPathTestConfig {
      */
     apiTestHelperPath?: string;
     /**
+     * НОВОЕ v14.1: Путь к методу отправки email уведомлений о 5xx ошибках
+     * Метод должен принимать HTML-строку с телом письма
+     *
+     * @example '../../../helpers/mailHelper' -> import { sendErrorMailbyApi } from '...'
+     */
+    emailHelperPath?: string;
+    /**
+     * НОВОЕ v14.1: Имя метода для отправки email (экспортируется из emailHelperPath)
+     * @default 'sendErrorMailbyApi'
+     */
+    emailHelperMethodName?: string;
+    /**
+     * НОВОЕ v14.1: Отправлять email уведомления при 5xx ошибках (500, 501, 502, 503)
+     * Требует настроенный emailHelperPath
+     * @default false
+     */
+    send5xxEmailNotification?: boolean;
+    /**
      * Путь к сгенерированным API методам (для поиска DTO)
      * @example './src/generated-api'
      */
@@ -328,10 +346,15 @@ export declare class HappyPathTestGenerator {
     private appendTestsToFile;
     /**
      * Генерирует полный файл теста
+     * @param endpoint - Эндпоинт API
+     * @param method - HTTP метод
+     * @param requests - Массив запросов
+     * @param outputDir - Папка для тестов (с учётом категории если groupByCategory: true)
      */
     private generateTestFile;
     /**
      * ИСПРАВЛЕНИЕ 9: Создает файлы с НОРМАЛИЗОВАННЫМИ данными на основе DTO
+     * ИСПРАВЛЕНИЕ v14.1: Добавлен параметр outputDir для корректной работы с groupByCategory
      */
     private createDataFiles;
     /**
@@ -346,4 +369,78 @@ export declare class HappyPathTestGenerator {
     private markAsGenerated;
 }
 export declare function generateHappyPathTests(config: HappyPathTestConfig, sqlConnection: any): Promise<void>;
+/**
+ * Конфигурация для переактуализации тестовых данных
+ */
+export interface ReActualizeConfig {
+    /**
+     * Путь к папке со сгенерированными Happy Path тестами
+     * @example './e2e/api/happy-path'
+     */
+    testsDir: string;
+    /**
+     * Фильтр endpoints для актуализации
+     * Если пустой - актуализируются все endpoints
+     * @example ['/api/v1/orders', '/api/v1/users/{id}']
+     */
+    endpointFilter?: string[];
+    /**
+     * URL тестового стенда
+     * @example 'https://api.example.com'
+     */
+    standUrl: string;
+    /**
+     * Axios конфиг для авторизации
+     * @example { headers: { Authorization: 'Bearer xxx' } }
+     */
+    axiosConfig: any;
+    /**
+     * Обновлять тестовые данные в файлах
+     * Если false - только показывает что изменилось
+     * @default true
+     */
+    updateFiles?: boolean;
+    /**
+     * Включить детальное логирование
+     * @default false
+     */
+    debug?: boolean;
+}
+/**
+ * Результат переактуализации
+ */
+export interface ReActualizeResult {
+    totalTests: number;
+    updatedTests: number;
+    skippedTests: number;
+    failedTests: number;
+    details: Array<{
+        testFile: string;
+        endpoint: string;
+        method: string;
+        status: 'updated' | 'skipped' | 'failed' | 'unchanged';
+        reason?: string;
+        changedFields?: string[];
+    }>;
+}
+/**
+ * НОВОЕ v14.1: Переактуализация тестовых данных Happy Path тестов
+ *
+ * Этот метод:
+ * 1. Сканирует папку с тестами
+ * 2. Извлекает endpoint и тестовые данные из каждого теста
+ * 3. Вызывает endpoint на реальном стенде
+ * 4. Сравнивает полученные данные с ожидаемыми в тесте
+ * 5. Обновляет тестовые данные если есть различия
+ *
+ * @example
+ * await reActualizeHappyPathTests({
+ *   testsDir: './e2e/api/happy-path',
+ *   standUrl: 'https://api.example.com',
+ *   axiosConfig: { headers: { Authorization: 'Bearer xxx' } },
+ *   endpointFilter: ['/api/v1/orders'], // опционально
+ *   updateFiles: true
+ * });
+ */
+export declare function reActualizeHappyPathTests(config: ReActualizeConfig): Promise<ReActualizeResult>;
 //# sourceMappingURL=happy-path-generator.d.ts.map

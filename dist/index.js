@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ApiGenerator = exports.generateDtoValidationCode = exports.findDtoForEndpoint = exports.generateTypeValidationCode = exports.compareDbWithResponse = exports.deepCompareObjects = exports.convertDataTypes = exports.normalizeDbData = exports.collectApiData = exports.createCollector = exports.sendCollectedData = exports.setupApiCollector = exports.HappyPathTestGenerator = exports.generateHappyPathTests = exports.analyzeAndGenerateTestData = exports.generatePairwiseTests = exports.generatePositiveTests = exports.generateNegativeTests = exports.generateApiTests = void 0;
+exports.ApiGenerator = exports.generateDtoValidationCode = exports.findDtoForEndpoint = exports.generateTypeValidationCode = exports.compareDbWithResponse = exports.deepCompareObjects = exports.convertDataTypes = exports.normalizeDbData = exports.collectApiData = exports.createCollector = exports.sendCollectedData = exports.setupApiCollector = exports.reActualizeHappyPathTests = exports.HappyPathTestGenerator = exports.generateHappyPathTests = exports.analyzeAndGenerateTestData = exports.generatePairwiseTests = exports.generatePositiveTests = exports.generateNegativeTests = exports.generateApiTests = void 0;
 exports.generateApi = generateApi;
 const axios_1 = __importDefault(require("axios"));
 const fs = __importStar(require("fs"));
@@ -57,6 +57,8 @@ Object.defineProperty(exports, "analyzeAndGenerateTestData", { enumerable: true,
 var happy_path_generator_1 = require("./happy-path-generator");
 Object.defineProperty(exports, "generateHappyPathTests", { enumerable: true, get: function () { return happy_path_generator_1.generateHappyPathTests; } });
 Object.defineProperty(exports, "HappyPathTestGenerator", { enumerable: true, get: function () { return happy_path_generator_1.HappyPathTestGenerator; } });
+// v14.1: Реактуализация тестовых данных
+Object.defineProperty(exports, "reActualizeHappyPathTests", { enumerable: true, get: function () { return happy_path_generator_1.reActualizeHappyPathTests; } });
 // Экспорт коллектора данных для UI тестов
 var test_collector_1 = require("./test-collector");
 Object.defineProperty(exports, "setupApiCollector", { enumerable: true, get: function () { return test_collector_1.setupApiCollector; } });
