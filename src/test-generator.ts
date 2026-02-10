@@ -130,6 +130,19 @@ export interface NegativeTestConfig extends BaseTestConfig {
    * @default true
    */
   generate405Tests?: boolean;
+
+  /**
+   * НОВОЕ v14.1: Глобально исключить методы из 405 проверок
+   * Эти HTTP методы НЕ будут использоваться для проверки 405 ошибки
+   *
+   * ЗАЧЕМ: Некоторые методы (например DELETE) опасны - могут удалить тестовые данные
+   * даже если для конкретного endpoint этот метод разрешён
+   *
+   * @example ['DELETE'] - никогда не вызывать DELETE для 405 проверок
+   * @example ['DELETE', 'PUT'] - никогда не вызывать DELETE и PUT
+   * @default []
+   */
+  exclude405Methods?: string[];
 }
 
 /**
@@ -326,6 +339,55 @@ const russianToEnglishCategories: Record<string, string> = {
 };
 
 /**
+ * НОВОЕ v14.1: Нормализует путь endpoint для сравнения
+ * Заменяет все параметры пути на {id} для унификации
+ * /api/v1/orders/{orderId} -> /api/v1/orders/{id}
+ * /api/v1/orders/123 -> /api/v1/orders/{id}
+ */
+function normalizeEndpointPath(endpointPath: string): string {
+  return endpointPath
+    // Заменяем {любое_имя} на {id}
+    .replace(/\{[^}]+\}/g, '{id}')
+    // Заменяем числа в пути на {id}
+    .replace(/\/\d+/g, '/{id}')
+    .toLowerCase();
+}
+
+/**
+ * НОВОЕ v14.1: Строит карту endpoint -> разрешённые HTTP методы
+ * Используется для проверки 405 тестов - чтобы не вызывать методы которые реально разрешены
+ */
+function buildEndpointMethodsMap(methods: ExtractedMethod[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+
+  for (const method of methods) {
+    if (!method.path) continue;
+
+    const normalizedPath = normalizeEndpointPath(method.path);
+    const httpMethod = method.httpMethod.toUpperCase();
+
+    if (!map.has(normalizedPath)) {
+      map.set(normalizedPath, new Set());
+    }
+    map.get(normalizedPath)!.add(httpMethod);
+  }
+
+  return map;
+}
+
+/**
+ * НОВОЕ v14.1: Получает разрешённые методы для endpoint
+ */
+function getAllowedMethodsForEndpoint(
+  endpointPath: string,
+  endpointMethodsMap: Map<string, Set<string>>
+): string[] {
+  const normalizedPath = normalizeEndpointPath(endpointPath);
+  const methods = endpointMethodsMap.get(normalizedPath);
+  return methods ? Array.from(methods) : [];
+}
+
+/**
  * НОВОЕ v14.0: Переводит или транслитерирует категорию
  */
 function translateCategory(category: string): string {
@@ -414,6 +476,7 @@ export async function generateNegativeTests(config: NegativeTestConfig): Promise
     generate400Tests: true,
     generate404Tests: true,
     generate405Tests: true,
+    exclude405Methods: [] as string[], // НОВОЕ v14.1: Глобально исключенные методы
     baseTestPath: '../../../fixtures/baseTest',
     axiosHelpersPath: '../../../helpers/axiosHelpers',
     apiTestHelperPath: '../../../helpers/apiTestHelper',
@@ -443,6 +506,27 @@ export async function generateNegativeTests(config: NegativeTestConfig): Promise
       failures: []
     };
   }
+
+  // НОВОЕ v14.1: Сначала собираем ВСЕ методы из всех файлов
+  // чтобы построить карту endpoint -> разрешённые методы
+  const allMethods: ExtractedMethod[] = [];
+  for (const apiFile of apiFiles) {
+    try {
+      const content = fs.readFileSync(apiFile, 'utf-8');
+      const fileMethods = extractMethodsFromFile(content, apiFile);
+      fileMethods.forEach(m => {
+        m.sourceFile = apiFile;
+        m.category = determineMethodCategory(m);
+      });
+      allMethods.push(...fileMethods);
+    } catch (error) {
+      console.warn(`⚠️  Ошибка чтения файла ${apiFile}:`, error);
+    }
+  }
+
+  // НОВОЕ v14.1: Строим карту: нормализованный путь -> Set<разрешённые HTTP методы>
+  const endpointMethodsMap = buildEndpointMethodsMap(allMethods);
+  console.log(`📊 Построена карта endpoint -> методы (${endpointMethodsMap.size} уникальных endpoints)`);
 
   const result: GenerationResult = {
     generatedCount: 0,
@@ -511,7 +595,8 @@ export async function generateNegativeTests(config: NegativeTestConfig): Promise
             const protectedAreas = extractProtectedAreas(existingContent);
 
             // Генерируем новое содержимое (только негативные тесты)
-            const newContent = await generateNegativeTestForMethod(method, fullConfig);
+            // НОВОЕ v14.1: Передаём карту разрешённых методов для корректной генерации 405 тестов
+            const newContent = await generateNegativeTestForMethod(method, fullConfig, endpointMethodsMap);
 
             // Восстанавливаем protected области
             const finalContent = restoreProtectedAreas(newContent, protectedAreas);
@@ -521,7 +606,8 @@ export async function generateNegativeTests(config: NegativeTestConfig): Promise
             result.updatedCount++;
           } else {
             // Новый файл
-            const testContent = await generateNegativeTestForMethod(method, fullConfig);
+            // НОВОЕ v14.1: Передаём карту разрешённых методов для корректной генерации 405 тестов
+            const testContent = await generateNegativeTestForMethod(method, fullConfig, endpointMethodsMap);
             fs.writeFileSync(testFilePath, testContent);
             console.log(`    ✅ ${testFileName} (создан)`);
             result.generatedCount++;
@@ -1276,6 +1362,7 @@ function createHappyPathDataFile(
 
 /**
  * НОВОЕ v14.0: Генерирует содержимое НЕГАТИВНОГО теста для метода
+ * ОБНОВЛЕНО v14.1: Добавлен параметр endpointMethodsMap для корректной генерации 405 тестов
  */
 async function generateNegativeTestForMethod(
   method: ExtractedMethod,
@@ -1285,11 +1372,13 @@ async function generateNegativeTestForMethod(
     generate400Tests: boolean;
     generate404Tests: boolean;
     generate405Tests: boolean;
+    exclude405Methods: string[];
     baseTestPath: string;
     axiosHelpersPath: string;
     apiTestHelperPath: string;
     groupByCategory: boolean;
-  }
+  },
+  endpointMethodsMap: Map<string, Set<string>>
 ): Promise<string> {
   const lines: string[] = [];
 
@@ -1416,9 +1505,32 @@ async function generateNegativeTestForMethod(
   }
 
   // Тесты 3-5: Method Not Allowed (405)
+  // ОБНОВЛЕНО v14.1: Исключаем методы которые реально разрешены для endpoint + глобально исключённые
   if (config.generate405Tests) {
-    const otherMethods = ['GET', 'POST', 'PUT', 'DELETE'].filter(m => m !== method.httpMethod);
-    for (const otherMethod of otherMethods.slice(0, 3)) {
+    // Получаем разрешённые методы для этого endpoint
+    const allowedMethods = getAllowedMethodsForEndpoint(method.path, endpointMethodsMap);
+
+    // Глобально исключённые методы (например DELETE чтобы не удалять данные)
+    const globallyExcluded = (config.exclude405Methods || []).map(m => m.toUpperCase());
+
+    // Фильтруем методы: убираем текущий метод, разрешённые для endpoint и глобально исключённые
+    const methodsToTest = ['GET', 'POST', 'PUT', 'DELETE'].filter(m => {
+      if (m === method.httpMethod.toUpperCase()) return false; // Текущий метод
+      if (allowedMethods.includes(m)) return false; // Разрешённый для endpoint
+      if (globallyExcluded.includes(m)) return false; // Глобально исключённый
+      return true;
+    });
+
+    // Логируем исключённые методы для отладки
+    const excludedForEndpoint = allowedMethods.filter(m => m !== method.httpMethod.toUpperCase());
+    if (excludedForEndpoint.length > 0) {
+      lines.push(`  // ПРИМЕЧАНИЕ: Методы ${excludedForEndpoint.join(', ')} разрешены для этого endpoint - пропускаем`);
+    }
+    if (globallyExcluded.length > 0) {
+      lines.push(`  // ПРИМЕЧАНИЕ: Методы ${globallyExcluded.join(', ')} глобально исключены из 405 проверок`);
+    }
+
+    for (const otherMethod of methodsToTest.slice(0, 3)) {
       lines.push(`  test(\`${otherMethod} с токеном (\${apiErrorCodes.methodNotAllowed}) @api @negative\`, async ({ page }, testInfo) => {`);
       const wrongMethodCall = generateWrongMethodCall(otherMethod);
       lines.push(`    try {`);
@@ -1433,6 +1545,12 @@ async function generateNegativeTestForMethod(
       lines.push(`      await expect(error.config.method).toBe('${otherMethod.toLowerCase()}');`);
       lines.push('    }');
       lines.push('  });');
+      lines.push('');
+    }
+
+    // Если все методы исключены - добавляем комментарий
+    if (methodsToTest.length === 0) {
+      lines.push('  // Все HTTP методы разрешены или глобально исключены - нет 405 тестов');
       lines.push('');
     }
   }
