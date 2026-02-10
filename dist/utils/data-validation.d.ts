@@ -18,6 +18,53 @@ export interface ValidationConfig {
     axiosConfig?: any;
     logChanges?: boolean;
     logPath?: string;
+    /**
+     * Путь к JSON файлу для логирования 4xx ошибок (400, 404, 422 и т.д.)
+     * @example './validation-errors/4xx-errors.json'
+     */
+    clientErrorsLogPath?: string;
+    /**
+     * Путь к JSON файлу для логирования 5xx ошибок (500, 501, 502, 503)
+     * @example './validation-errors/5xx-errors.json'
+     */
+    serverErrorsLogPath?: string;
+    /**
+     * Путь к методу отправки email для 5xx ошибок
+     * @example '../../../helpers/mailHelper'
+     */
+    emailHelperPath?: string;
+    /**
+     * Имя метода для отправки email
+     * @default 'sendErrorMailbyApi'
+     */
+    emailHelperMethodName?: string;
+    /**
+     * Отправлять email при 5xx ошибках во время валидации
+     * @default false
+     */
+    sendServerErrorEmail?: boolean;
+    /**
+     * Функция для отправки email (передается напрямую)
+     * Альтернатива emailHelperPath - можно передать функцию напрямую
+     */
+    emailSendFunction?: (html: string) => Promise<void>;
+}
+/**
+ * Структура записи об ошибке валидации
+ */
+export interface ValidationErrorEntry {
+    timestamp: string;
+    timestampMsk: string;
+    errorCode: number;
+    errorMessage: string;
+    endpoint: string;
+    method: string;
+    fullUrl: string;
+    requestBody?: any;
+    responseData?: any;
+    curlCommand: string;
+    requestId?: number;
+    testName?: string;
 }
 export interface TestRequest {
     id: number;

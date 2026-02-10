@@ -389,6 +389,10 @@ class HappyPathTestGenerator {
                 validateInDatabase: false, // По умолчанию выключено (нужна настройка)
                 logChanges: true,
                 logPath: './happy-path-validation-logs',
+                // НОВОЕ v14.1: Логирование ошибок валидации
+                clientErrorsLogPath: './validation-errors/4xx-client-errors.json',
+                serverErrorsLogPath: './validation-errors/5xx-server-errors.json',
+                sendServerErrorEmail: false,
                 ...(config.dataValidation || {})
             }
         };
@@ -402,6 +406,48 @@ class HappyPathTestGenerator {
         }
         if (this.config.dataValidation.validateInDatabase && !this.sqlStand) {
             console.warn('⚠️  validateInDatabase=true, но dbStandConnection не настроен');
+        }
+    }
+    /**
+     * НОВОЕ v14.1: Загружает функцию отправки email для уведомлений об ошибках
+     */
+    async loadEmailSendFunction() {
+        if (!this.config.emailHelperPath || !this.config.send5xxEmailNotification) {
+            return undefined;
+        }
+        try {
+            const emailHelperPath = this.config.emailHelperPath;
+            const methodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
+            // Пытаемся найти и загрузить модуль
+            const possiblePaths = [
+                path.resolve(process.cwd(), emailHelperPath),
+                path.resolve(process.cwd(), emailHelperPath + '.ts'),
+                path.resolve(process.cwd(), emailHelperPath + '.js'),
+                path.resolve(process.cwd(), 'src', emailHelperPath),
+                path.resolve(process.cwd(), 'src', emailHelperPath + '.ts')
+            ];
+            for (const tryPath of possiblePaths) {
+                if (fs.existsSync(tryPath)) {
+                    try {
+                        const module = require(tryPath);
+                        if (module[methodName] && typeof module[methodName] === 'function') {
+                            if (this.config.debug) {
+                                console.log(`🐛 Email функция '${methodName}' загружена из ${tryPath}`);
+                            }
+                            return module[methodName];
+                        }
+                    }
+                    catch (e) {
+                        // Продолжаем поиск
+                    }
+                }
+            }
+            console.warn(`⚠️  Не удалось загрузить email функцию '${methodName}' из '${emailHelperPath}'`);
+            return undefined;
+        }
+        catch (error) {
+            console.warn(`⚠️  Ошибка при загрузке email функции:`, error);
+            return undefined;
         }
     }
     async generate() {
@@ -478,10 +524,15 @@ class HappyPathTestGenerator {
                 }
                 // Обновляем конфиг валидации с правильными настройками
                 // НОВОЕ v14.0: Используем основные настройки axios из конфига (без дублирования)
+                // НОВОЕ v14.1: Добавляем логирование ошибок и email для 5xx
                 const validationConfig = {
                     ...this.config.dataValidation,
                     standUrl: standUrl,
-                    axiosConfig: axiosConfigObject
+                    axiosConfig: axiosConfigObject,
+                    // НОВОЕ v14.1: Передаём функцию отправки email если настроена
+                    emailSendFunction: this.config.send5xxEmailNotification && this.config.emailHelperPath
+                        ? await this.loadEmailSendFunction()
+                        : undefined
                 };
                 if (this.config.debug) {
                     console.log(`🐛 Конфиг валидации:`, {
@@ -489,7 +540,10 @@ class HappyPathTestGenerator {
                         validateBeforeGeneration: validationConfig.validateBeforeGeneration,
                         standUrl: validationConfig.standUrl,
                         hasAxiosConfig: !!validationConfig.axiosConfig,
-                        hasAuthHeader: !!validationConfig.axiosConfig?.headers?.authorization || !!validationConfig.axiosConfig?.headers?.Authorization
+                        hasAuthHeader: !!validationConfig.axiosConfig?.headers?.authorization || !!validationConfig.axiosConfig?.headers?.Authorization,
+                        clientErrorsLogPath: validationConfig.clientErrorsLogPath,
+                        serverErrorsLogPath: validationConfig.serverErrorsLogPath,
+                        sendServerErrorEmail: validationConfig.sendServerErrorEmail
                     });
                 }
                 // ВАЖНО: Передаем настоящий axios, а конфиг - отдельно в validationConfig

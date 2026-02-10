@@ -37,21 +37,27 @@
 4. **Безопасные 405 тесты**: Автоматическое исключение разрешённых методов для endpoint
 5. **Параметр exclude405Methods**: Глобальное исключение методов из 405 тестов
 6. **Исправление test-data папки**: Корректная работа при `groupByCategory: true` + `createSeparateDataFiles: true`
+7. **Логирование ошибок валидации**: 4xx и 5xx ошибки сохраняются в отдельные JSON файлы с CURL командами
 
 **Новые методы и интерфейсы:**
 - `reActualizeHappyPathTests()` - реактуализация тестовых данных
 - `ReActualizeConfig` - конфигурация реактуализации
 - `ReActualizeResult` - результат реактуализации
+- `ValidationErrorEntry` - структура записи об ошибке валидации
 
 **Новые параметры конфигурации:**
 - `HappyPathTestConfig.send5xxEmailNotification` - включить email уведомления
 - `HappyPathTestConfig.emailHelperPath` - путь к хелперу отправки email
 - `HappyPathTestConfig.emailHelperMethodName` - имя метода отправки email
 - `NegativeTestConfig.exclude405Methods` - исключить методы из 405 тестов
+- `dataValidation.clientErrorsLogPath` - путь к JSON файлу для 4xx ошибок
+- `dataValidation.serverErrorsLogPath` - путь к JSON файлу для 5xx ошибок
+- `dataValidation.sendServerErrorEmail` - отправлять email при 5xx ошибках валидации
 
 **Измененные файлы:**
 - `src/happy-path-generator.ts` → v14.1
 - `src/test-generator.ts` → v14.1
+- `src/utils/data-validation.ts` → v14.1 (логирование ошибок)
 - `src/index.ts` → добавлены новые экспорты
 
 ### v14.0 - Раздельные методы генерации тестов

@@ -317,6 +317,24 @@ export interface HappyPathTestConfig {
          * @default './happy-path-validation-logs'
          */
         logPath?: string;
+        /**
+         * НОВОЕ v14.1: Путь к JSON файлу для логирования 4xx ошибок
+         * Сохраняет ошибки 400, 404, 422 и подобные в читаемом JSON формате
+         * @example './validation-errors/client-errors.json'
+         */
+        clientErrorsLogPath?: string;
+        /**
+         * НОВОЕ v14.1: Путь к JSON файлу для логирования 5xx ошибок
+         * Сохраняет ошибки 500, 501, 502, 503 в отдельный файл
+         * @example './validation-errors/server-errors.json'
+         */
+        serverErrorsLogPath?: string;
+        /**
+         * НОВОЕ v14.1: Отправлять email уведомления при 5xx ошибках валидации
+         * Требует настроенный emailHelperPath в основном конфиге
+         * @default false
+         */
+        sendServerErrorEmail?: boolean;
     };
     /**
      * Включить детальное логирование для отладки
@@ -334,6 +352,10 @@ export declare class HappyPathTestGenerator {
      *                        Предпочтительнее использовать config.dbDataConnection и config.dbStandConnection
      */
     constructor(config: HappyPathTestConfig, sqlConnection?: any);
+    /**
+     * НОВОЕ v14.1: Загружает функцию отправки email для уведомлений об ошибках
+     */
+    private loadEmailSendFunction;
     generate(): Promise<void>;
     /**
      * ИСПРАВЛЕНИЕ 8: Правильная группировка - заменяем числа на {id}

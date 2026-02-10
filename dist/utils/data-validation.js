@@ -264,7 +264,22 @@ async function validateRequest(request, config, axios) {
         };
     }
     catch (error) {
-        console.error(`❌ Ошибка при валидации ${request.method} ${request.endpoint}:`, error.message);
+        const errorCode = error.response?.status || 0;
+        const errorMessage = error.response?.statusText || error.message || 'Unknown error';
+        const responseData = error.response?.data;
+        console.error(`❌ Ошибка при валидации ${request.method} ${request.endpoint}: ${errorCode} ${errorMessage}`);
+        // НОВОЕ v14.1: Логирование ошибок в файлы
+        const isServerError = errorCode >= 500 && errorCode <= 599;
+        const isClientError = errorCode >= 400 && errorCode <= 499;
+        if (isServerError) {
+            // 5xx ошибки - логируем в отдельный файл + отправляем email
+            await logValidationError(request, errorCode, errorMessage, responseData, config, true);
+            await sendServerErrorEmail(request, errorCode, errorMessage, responseData, config);
+        }
+        else if (isClientError) {
+            // 4xx ошибки - логируем в файл клиентских ошибок
+            await logValidationError(request, errorCode, errorMessage, responseData, config, false);
+        }
         // При ошибке API считаем данные устаревшими
         return {
             isValid: false,
@@ -312,6 +327,180 @@ async function logChanges(request, changes, config) {
     }
     catch (error) {
         console.error('❌ Ошибка при логировании изменений:', error);
+    }
+}
+/**
+ * НОВОЕ v14.1: Генерирует CURL команду для запроса
+ */
+function generateCurlCommand(method, fullUrl, requestBody, axiosConfig) {
+    const authHeader = axiosConfig?.headers?.Authorization ||
+        axiosConfig?.headers?.authorization ||
+        'Bearer YOUR_TOKEN';
+    let curl = `curl -X ${method} '${fullUrl}'`;
+    curl += ` \\\n  -H 'Authorization: ${authHeader}'`;
+    if (['POST', 'PUT', 'PATCH'].includes(method) && requestBody) {
+        curl += ` \\\n  -H 'Content-Type: application/json'`;
+        curl += ` \\\n  -d '${JSON.stringify(requestBody)}'`;
+    }
+    return curl;
+}
+/**
+ * НОВОЕ v14.1: Логирует ошибку валидации в JSON файл
+ */
+async function logValidationError(request, errorCode, errorMessage, responseData, config, isServerError) {
+    const logPath = isServerError ? config.serverErrorsLogPath : config.clientErrorsLogPath;
+    if (!logPath)
+        return;
+    try {
+        const logDir = path.dirname(logPath);
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+        const now = new Date();
+        const fullUrl = (config.standUrl || '') + request.endpoint;
+        const errorEntry = {
+            timestamp: now.toISOString(),
+            timestampMsk: now.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' (МСК)',
+            errorCode,
+            errorMessage,
+            endpoint: request.endpoint,
+            method: request.method,
+            fullUrl,
+            requestBody: request.request_body,
+            responseData,
+            curlCommand: generateCurlCommand(request.method, fullUrl, request.request_body, config.axiosConfig),
+            requestId: request.id,
+            testName: request.test_name
+        };
+        // Читаем существующий файл или создаем новую структуру
+        let errorLog;
+        if (fs.existsSync(logPath)) {
+            try {
+                const content = fs.readFileSync(logPath, 'utf-8');
+                errorLog = JSON.parse(content);
+                errorLog.lastUpdated = now.toISOString();
+                errorLog.totalErrors = errorLog.errors.length + 1;
+            }
+            catch {
+                // Если файл поврежден, создаем новый
+                errorLog = {
+                    generatedAt: now.toISOString(),
+                    lastUpdated: now.toISOString(),
+                    errorType: isServerError ? '5xx Server Errors' : '4xx Client Errors',
+                    totalErrors: 1,
+                    errors: []
+                };
+            }
+        }
+        else {
+            errorLog = {
+                generatedAt: now.toISOString(),
+                lastUpdated: now.toISOString(),
+                errorType: isServerError ? '5xx Server Errors' : '4xx Client Errors',
+                totalErrors: 1,
+                errors: []
+            };
+        }
+        // Добавляем новую ошибку
+        errorLog.errors.push(errorEntry);
+        errorLog.totalErrors = errorLog.errors.length;
+        // Записываем с красивым форматированием
+        fs.writeFileSync(logPath, JSON.stringify(errorLog, null, 2), 'utf-8');
+        const errorTypeLabel = isServerError ? '🔴 5xx' : '🟠 4xx';
+        console.log(`  ${errorTypeLabel} Ошибка ${errorCode} записана в ${path.basename(logPath)}`);
+    }
+    catch (error) {
+        console.error('❌ Ошибка при логировании ошибки валидации:', error);
+    }
+}
+/**
+ * НОВОЕ v14.1: Отправляет email уведомление о 5xx ошибке
+ */
+async function sendServerErrorEmail(request, errorCode, errorMessage, responseData, config) {
+    if (!config.sendServerErrorEmail)
+        return;
+    const sendFn = config.emailSendFunction;
+    if (!sendFn) {
+        console.warn('⚠️  Email функция не настроена для отправки уведомлений о 5xx ошибках');
+        return;
+    }
+    try {
+        const now = new Date();
+        const fullUrl = (config.standUrl || '') + request.endpoint;
+        const moscowTime = now.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
+        const curlCommand = generateCurlCommand(request.method, fullUrl, request.request_body, config.axiosConfig);
+        const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+    .container { background: white; border-radius: 8px; padding: 20px; max-width: 800px; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .header { background: #dc3545; color: white; padding: 15px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px; }
+    .header h1 { margin: 0; font-size: 20px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-weight: bold; color: #333; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+    .info-row { display: flex; margin-bottom: 5px; }
+    .info-label { font-weight: bold; width: 150px; color: #666; }
+    .info-value { color: #333; }
+    .error-code { font-size: 48px; font-weight: bold; color: #dc3545; text-align: center; margin: 20px 0; }
+    .curl-block { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+    .warning { background: #fff3cd; border: 1px solid #ffc107; padding: 10px; border-radius: 4px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚨 Ошибка валидации Happy Path - Server Error ${errorCode}</h1>
+    </div>
+
+    <div class="warning">
+      ⚠️ Эта ошибка произошла во время генерации/валидации Happy Path тестов
+    </div>
+
+    <div class="error-code">${errorCode}</div>
+
+    <div class="section">
+      <div class="section-title">📋 Информация о запросе</div>
+      <div class="info-row"><span class="info-label">Request ID:</span><span class="info-value">${request.id || 'N/A'}</span></div>
+      <div class="info-row"><span class="info-label">Test Name:</span><span class="info-value">${request.test_name || 'N/A'}</span></div>
+      <div class="info-row"><span class="info-label">Время ошибки:</span><span class="info-value">${moscowTime} (МСК)</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🌐 Информация об эндпоинте</div>
+      <div class="info-row"><span class="info-label">Endpoint:</span><span class="info-value">${request.endpoint}</span></div>
+      <div class="info-row"><span class="info-label">HTTP метод:</span><span class="info-value">${request.method}</span></div>
+      <div class="info-row"><span class="info-label">Полный URL:</span><span class="info-value">${fullUrl}</span></div>
+      <div class="info-row"><span class="info-label">Код ошибки:</span><span class="info-value">${errorCode}</span></div>
+      <div class="info-row"><span class="info-label">Сообщение:</span><span class="info-value">${errorMessage}</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📋 CURL для повторения запроса</div>
+      <div class="curl-block">${curlCommand}</div>
+    </div>
+
+    ${request.request_body ? `
+    <div class="section">
+      <div class="section-title">📤 Request Body</div>
+      <div class="curl-block">${JSON.stringify(request.request_body, null, 2)}</div>
+    </div>
+    ` : ''}
+
+    <div class="section">
+      <div class="section-title">📄 Response Data</div>
+      <div class="curl-block">${JSON.stringify(responseData, null, 2) || 'No response data'}</div>
+    </div>
+  </div>
+</body>
+</html>`;
+        await sendFn(emailHtml);
+        console.log(`  📧 Email уведомление о 5xx ошибке отправлено`);
+    }
+    catch (error) {
+        console.error('❌ Не удалось отправить email:', error);
     }
 }
 /**

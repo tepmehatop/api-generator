@@ -9,6 +9,7 @@
 - **📋 CURL вывод**: При падении Happy Path теста выводится copyable CURL для отладки
 - **🛡️ Безопасные 405 тесты**: Исключение разрешённых методов + параметр `exclude405Methods`
 - **🐛 Исправление test-data**: Корректная работа с `groupByCategory` + `createSeparateDataFiles`
+- **📁 Логирование ошибок валидации**: 4xx и 5xx ошибки сохраняются в отдельные JSON файлы с CURL
 
 ## 📋 Что было в v14.0
 
@@ -178,9 +179,51 @@ await generateHappyPathTests({
   // v14.1: Email уведомления при 5xx ошибках
   send5xxEmailNotification: true,
   emailHelperPath: '../../../helpers/mailHelper',
-  emailHelperMethodName: 'sendErrorMailbyApi'
+  emailHelperMethodName: 'sendErrorMailbyApi',
+
+  // v14.1: Логирование ошибок валидации в JSON файлы
+  dataValidation: {
+    enabled: true,
+    validateBeforeGeneration: true,
+    clientErrorsLogPath: './validation-errors/4xx-client-errors.json',  // 400, 404, 422 и т.д.
+    serverErrorsLogPath: './validation-errors/5xx-server-errors.json',  // 500, 501, 502, 503
+    sendServerErrorEmail: true  // Отправка email при 5xx ошибках валидации
+  }
 }, sql);
 ```
+
+### 3.0.1 Логирование ошибок валидации - v14.1 ⭐ NEW
+
+При генерации Happy Path тестов происходит валидация данных - вызов реальных API endpoints.
+Если endpoints возвращают ошибки, они сохраняются в JSON файлы:
+
+**Структура JSON файла ошибок:**
+```json
+{
+  "generatedAt": "2026-02-10T12:00:00.000Z",
+  "lastUpdated": "2026-02-10T12:30:00.000Z",
+  "errorType": "4xx Client Errors",
+  "totalErrors": 3,
+  "errors": [
+    {
+      "timestamp": "2026-02-10T12:00:00.000Z",
+      "timestampMsk": "10.02.2026, 15:00:00 (МСК)",
+      "errorCode": 404,
+      "errorMessage": "Not Found",
+      "endpoint": "/api/v1/orders/12345",
+      "method": "GET",
+      "fullUrl": "https://api.example.com/api/v1/orders/12345",
+      "curlCommand": "curl -X GET 'https://api.example.com/api/v1/orders/12345' \\\n  -H 'Authorization: Bearer xxx'",
+      "requestId": 123,
+      "testName": "get-order-test"
+    }
+  ]
+}
+```
+
+**Что логируется:**
+- **4xx ошибки** (400, 404, 422 и т.д.) → `./validation-errors/4xx-client-errors.json`
+- **5xx ошибки** (500, 501, 502, 503) → `./validation-errors/5xx-server-errors.json` + **email**
 
 **Особенности:**
 - ✅ Тесты на основе реальных данных из UI тестов
@@ -432,6 +475,7 @@ await analyzeAndGenerateTestData({
 - ✅ **Безопасные 405 тесты**: Автоматическое исключение разрешённых методов
 - ✅ **Параметр exclude405Methods**: Глобальное исключение методов из 405 тестов
 - ✅ **Исправление test-data папки**: Корректная работа с groupByCategory
+- ✅ **Логирование ошибок валидации**: 4xx → JSON файл, 5xx → JSON файл + email
 
 ### v14.0
 - ✅ **Раздельные методы генерации**: `generateNegativeTests()`, `generatePositiveTests()`, `generatePairwiseTests()`
