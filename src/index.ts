@@ -44,12 +44,21 @@ export {
 } from './test-collector';
 
 // Экспорт утилит для Happy Path (пункты 5, 6, 9, 10)
-export { 
-  normalizeDbData, 
-  convertDataTypes, 
-  deepCompareObjects, 
-  compareDbWithResponse 
+export {
+  normalizeDbData,
+  convertDataTypes,
+  deepCompareObjects,
+  compareDbWithResponse
 } from './utils/data-comparison';
+
+// НОВОЕ v14.1: Экспорт утилиты для email уведомлений об ошибках
+export {
+  generateErrorEmailHtml,
+  generateCurlCommand,
+  sendErrorNotification,
+  isServerError,
+  ErrorNotificationData
+} from './utils/error-notification';
 
 export { 
   generateTypeValidationCode, 

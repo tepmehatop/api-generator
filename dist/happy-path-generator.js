@@ -791,9 +791,10 @@ class HappyPathTestGenerator {
         if (this.config.apiTestHelperPath) {
             imports.push(`import { getMessageFromError } from '${this.config.apiTestHelperPath}';`);
         }
-        // НОВОЕ v14.1: Импорт email хелпера для уведомлений о 5xx ошибках
+        // НОВОЕ v14.1: Импорт для email уведомлений о 5xx ошибках
         if (this.config.send5xxEmailNotification && this.config.emailHelperPath) {
             imports.push(`import { ${this.config.emailHelperMethodName} } from '${this.config.emailHelperPath}';`);
+            imports.push(`import { generateErrorEmailHtml } from '${this.config.packageName}/dist/utils/error-notification';`);
         }
         // ИСПРАВЛЕНИЕ 10: Импорт DTO
         // ИСПРАВЛЕНИЕ v14.1: Используем переданный outputDir для корректного относительного пути
@@ -959,93 +960,26 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
             testCode += `      console.error('Request:', JSON.stringify(requestData, null, 2));
 `;
         }
-        // НОВОЕ v14.1: Email уведомление при 5xx ошибках
+        // НОВОЕ v14.1: Email уведомление при 5xx ошибках (шаблон вынесен в утилиту)
         if (use5xxEmailNotification) {
             testCode += `
-      // НОВОЕ v14.1: Отправка email уведомления при 5xx ошибках
+      // Отправка email уведомления при 5xx ошибках
       const errorStatus = error.response?.status;
       if (errorStatus >= 500 && errorStatus <= 503) {
-        const moscowTime = new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
-        const testFilePath = testInfo.file || 'unknown';
-        const testTitle = testInfo.title || 'Unknown Test';
-`;
-            // Генерируем CURL для email
-            if (hasBody) {
-                testCode += `        const curlCommand = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
-  -H 'Content-Type: application/json' \\\\
-  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' \\\\
-  -d '\${JSON.stringify(requestData)}'\`;
-`;
-            }
-            else {
-                testCode += `        const curlCommand = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
-  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
-`;
-            }
-            testCode += `
-        const emailHtml = \`
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-    .container { background: white; border-radius: 8px; padding: 20px; max-width: 800px; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-    .header { background: #dc3545; color: white; padding: 15px; border-radius: 8px 8px 0 0; margin: -20px -20px 20px -20px; }
-    .header h1 { margin: 0; font-size: 20px; }
-    .section { margin-bottom: 20px; }
-    .section-title { font-weight: bold; color: #333; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
-    .info-row { display: flex; margin-bottom: 5px; }
-    .info-label { font-weight: bold; width: 150px; color: #666; }
-    .info-value { color: #333; }
-    .error-code { font-size: 48px; font-weight: bold; color: #dc3545; text-align: center; margin: 20px 0; }
-    .curl-block { background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-    .run-command { background: #28a745; color: white; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>🚨 API Test Failed - Server Error \${errorStatus}</h1>
-    </div>
-
-    <div class="error-code">\${errorStatus}</div>
-
-    <div class="section">
-      <div class="section-title">📋 Информация о тесте</div>
-      <div class="info-row"><span class="info-label">Название теста:</span><span class="info-value">\${testTitle}</span></div>
-      <div class="info-row"><span class="info-label">Файл теста:</span><span class="info-value">\${testFilePath}</span></div>
-      <div class="info-row"><span class="info-label">Время падения:</span><span class="info-value">\${moscowTime} (МСК)</span></div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">🌐 Информация о запросе</div>
-      <div class="info-row"><span class="info-label">Endpoint:</span><span class="info-value">\${actualEndpoint}</span></div>
-      <div class="info-row"><span class="info-label">HTTP метод:</span><span class="info-value">\${httpMethod}</span></div>
-      <div class="info-row"><span class="info-label">Полный URL:</span><span class="info-value">\${${standUrlVar}}\${actualEndpoint}</span></div>
-      <div class="info-row"><span class="info-label">Код ошибки:</span><span class="info-value">\${errorStatus}</span></div>
-      <div class="info-row"><span class="info-label">Статус ошибки:</span><span class="info-value">\${error.response?.statusText || 'Unknown'}</span></div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">▶️ Команда для запуска теста</div>
-      <div class="run-command">npx playwright test "\${testFilePath}"</div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">📋 CURL для повторения запроса</div>
-      <div class="curl-block">\${curlCommand}</div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">📄 Response Data</div>
-      <div class="curl-block">\${JSON.stringify(error.response?.data, null, 2) || 'No response data'}</div>
-    </div>
-  </div>
-</body>
-</html>\`;
-
+        const errorData = {
+          errorCode: errorStatus,
+          errorMessage: error.response?.statusText || error.message,
+          endpoint: actualEndpoint,
+          method: httpMethod,
+          fullUrl: ${standUrlVar} + actualEndpoint,
+          testFilePath: testInfo.file,
+          testTitle: testInfo.title,${hasBody ? `
+          requestBody: requestData,` : ''}
+          responseData: error.response?.data,
+          axiosConfig: ${axiosConfig}
+        };
         try {
+          const emailHtml = generateErrorEmailHtml(errorData);
           await ${emailMethodName}(emailHtml);
           console.log('📧 Email уведомление о 5xx ошибке отправлено');
         } catch (emailError) {

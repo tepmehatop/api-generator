@@ -3,6 +3,7 @@ export { analyzeAndGenerateTestData, DatabaseAnalyzerConfig } from './database-a
 export { generateHappyPathTests, HappyPathTestConfig, HappyPathTestGenerator, reActualizeHappyPathTests, ReActualizeConfig, ReActualizeResult } from './happy-path-generator';
 export { setupApiCollector, sendCollectedData, createCollector, collectApiData, CollectorConfig, ApiRequestData } from './test-collector';
 export { normalizeDbData, convertDataTypes, deepCompareObjects, compareDbWithResponse } from './utils/data-comparison';
+export { generateErrorEmailHtml, generateCurlCommand, sendErrorNotification, isServerError, ErrorNotificationData } from './utils/error-notification';
 export { generateTypeValidationCode, FieldSchema } from './utils/type-validator';
 export { findDtoForEndpoint, generateDtoValidationCode, DTOInfo, DTOField } from './utils/dto-finder';
 export interface GeneratorConfig {
