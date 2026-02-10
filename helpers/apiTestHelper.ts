@@ -1,9 +1,42 @@
 /**
  * Helper для генерации CURL команд и улучшенных сообщений об ошибках в API тестах
+ * ВЕРСИЯ 14.1 - handleApiError с email уведомлениями
  */
 
-import { AxiosResponse, AxiosError } from 'axios';
-import * as chalk from 'chalk';
+import { AxiosResponse, AxiosError, AxiosRequestConfig } from 'axios';
+import { generateErrorEmailHtml, ErrorNotificationData, isServerError } from '../src/utils/error-notification';
+
+/**
+ * Интерфейс для Playwright TestInfo
+ */
+export interface TestInfo {
+  file?: string;
+  title?: string;
+  testId?: string;
+  [key: string]: any;
+}
+
+/**
+ * Параметры для handleApiError
+ */
+export interface HandleApiErrorParams {
+  /** Axios ошибка */
+  error: AxiosError;
+  /** Playwright TestInfo - информация о текущем тесте */
+  testInfo: TestInfo;
+  /** Endpoint API */
+  endpoint: string;
+  /** HTTP метод */
+  method: string;
+  /** URL стенда */
+  standUrl: string;
+  /** Тело запроса (для POST/PUT/PATCH) */
+  requestBody?: any;
+  /** Axios конфиг с headers для авторизации */
+  axiosConfig?: AxiosRequestConfig;
+  /** Функция отправки email (принимает HTML строку) */
+  sendEmailFn?: (html: string) => Promise<void>;
+}
 
 /**
  * Генерирует CURL команду из axios response или error
@@ -168,4 +201,94 @@ Expected status: ${expectedStatus}, but got: ${actualStatus}
 CURL to reproduce:
 ${curlCommand}
 `;
+}
+
+/**
+ * Централизованный обработчик ошибок API тестов
+ *
+ * Выполняет:
+ * 1. Логирование детальной информации об ошибке
+ * 2. Генерацию CURL команды для воспроизведения
+ * 3. Отправку email уведомления при 5xx ошибках (если передана sendEmailFn)
+ *
+ * @param params - Параметры обработки ошибки
+ * @returns void - после логирования пробрасывает ошибку дальше
+ *
+ * @example
+ * ```typescript
+ * test('GET /api/users', async ({ page }, testInfo) => {
+ *   try {
+ *     const response = await axios.get(url, config);
+ *   } catch (error: any) {
+ *     await handleApiError({
+ *       error,
+ *       testInfo,
+ *       endpoint: '/api/users',
+ *       method: 'GET',
+ *       standUrl: process.env.StandURL,
+ *       axiosConfig: configApiHeaderAdmin,
+ *       sendEmailFn: sendErrorMailbyApi
+ *     });
+ *   }
+ * });
+ * ```
+ */
+export async function handleApiError(params: HandleApiErrorParams): Promise<never> {
+  const {
+    error,
+    testInfo,
+    endpoint,
+    method,
+    standUrl,
+    requestBody,
+    axiosConfig,
+    sendEmailFn
+  } = params;
+
+  const errorStatus = error.response?.status;
+  const fullUrl = standUrl + endpoint;
+
+  // 1. Логирование в консоль
+  console.error('❌ Ошибка при вызове endpoint:');
+  console.error('Endpoint:', endpoint);
+  console.error('Method:', method);
+  console.error('Full URL:', fullUrl);
+
+  if (requestBody) {
+    console.error('Request:', JSON.stringify(requestBody, null, 2));
+  }
+
+  console.error('Response status:', errorStatus);
+  console.error('Response data:', JSON.stringify(error.response?.data, null, 2));
+
+  // Детальный вывод с CURL командой
+  const errorMessage = getMessageFromError(error);
+  console.error(errorMessage);
+
+  // 2. Отправка email при 5xx ошибках
+  if (sendEmailFn && errorStatus && isServerError(errorStatus)) {
+    const errorData: ErrorNotificationData = {
+      errorCode: errorStatus,
+      errorMessage: error.response?.statusText || error.message,
+      endpoint: endpoint,
+      method: method,
+      fullUrl: fullUrl,
+      testFilePath: testInfo.file,
+      testTitle: testInfo.title,
+      requestBody: requestBody,
+      responseData: error.response?.data,
+      axiosConfig: axiosConfig
+    };
+
+    try {
+      const emailHtml = generateErrorEmailHtml(errorData);
+      await sendEmailFn(emailHtml);
+      console.log('📧 Email уведомление о 5xx ошибке отправлено');
+    } catch (emailError) {
+      console.error('❌ Не удалось отправить email:', emailError);
+    }
+  }
+
+  // 3. Пробрасываем ошибку дальше для падения теста
+  throw error;
 }

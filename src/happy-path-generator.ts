@@ -1298,15 +1298,14 @@ export class HappyPathTestGenerator {
       imports.push(`import { ${this.config.axiosConfigName} } from '${this.config.axiosConfigPath}';`);
     }
 
-    // НОВОЕ v14.0: Импорт apiTestHelper для детализации ошибок
+    // НОВОЕ v14.1: Импорт handleApiError из apiTestHelper (содержит email логику внутри)
     if (this.config.apiTestHelperPath) {
-      imports.push(`import { getMessageFromError } from '${this.config.apiTestHelperPath}';`);
+      imports.push(`import { handleApiError } from '${this.config.apiTestHelperPath}';`);
     }
 
-    // НОВОЕ v14.1: Импорт для email уведомлений о 5xx ошибках
+    // НОВОЕ v14.1: Импорт функции отправки email если настроена
     if (this.config.send5xxEmailNotification && this.config.emailHelperPath) {
       imports.push(`import { ${this.config.emailHelperMethodName} } from '${this.config.emailHelperPath}';`);
-      imports.push(`import { generateErrorEmailHtml } from '${this.config.packageName}/dist/utils/error-notification';`);
     }
 
     // ИСПРАВЛЕНИЕ 10: Импорт DTO
@@ -1490,63 +1489,33 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 `;
     }
 
-    // НОВОЕ v14.0: Детальный вывод ошибки через apiTestHelper
+    // НОВОЕ v14.1: Используем handleApiError для обработки ошибок (email логика внутри)
     const useApiTestHelper = this.config.apiTestHelperPath ? true : false;
     const use5xxEmailNotification = this.config.send5xxEmailNotification && this.config.emailHelperPath;
     const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
 
-    testCode += `    } catch (error: any) {
-      console.error('❌ Ошибка при вызове endpoint:');
-      console.error('Endpoint template:', endpoint);
-      console.error('Actual endpoint:', actualEndpoint);
-      console.error('Method:', httpMethod);
-`;
-
-    if (hasBody) {
-      testCode += `      console.error('Request:', JSON.stringify(requestData, null, 2));
-`;
-    }
-
-    // НОВОЕ v14.1: Email уведомление при 5xx ошибках (шаблон вынесен в утилиту)
-    if (use5xxEmailNotification) {
-      testCode += `
-      // Отправка email уведомления при 5xx ошибках
-      const errorStatus = error.response?.status;
-      if (errorStatus >= 500 && errorStatus <= 503) {
-        const errorData = {
-          errorCode: errorStatus,
-          errorMessage: error.response?.statusText || error.message,
-          endpoint: actualEndpoint,
-          method: httpMethod,
-          fullUrl: ${standUrlVar} + actualEndpoint,
-          testFilePath: testInfo.file,
-          testTitle: testInfo.title,${hasBody ? `
-          requestBody: requestData,` : ''}
-          responseData: error.response?.data,
-          axiosConfig: ${axiosConfig}
-        };
-        try {
-          const emailHtml = generateErrorEmailHtml(errorData);
-          await ${emailMethodName}(emailHtml);
-          console.log('📧 Email уведомление о 5xx ошибке отправлено');
-        } catch (emailError) {
-          console.error('❌ Не удалось отправить email:', emailError);
-        }
-      }
-`;
-    }
-
-    // НОВОЕ v14.0: Используем getMessageFromError для детализации
     if (useApiTestHelper) {
-      testCode += `
-      // Детальный вывод через apiTestHelper (можно скопировать curl для повторения в Postman)
-      const errorMessage = getMessageFromError(error);
-      console.error(errorMessage);
-      throw error;
+      // Используем централизованный handleApiError
+      testCode += `    } catch (error: any) {
+      await handleApiError({
+        error,
+        testInfo,
+        endpoint: actualEndpoint,
+        method: httpMethod,
+        standUrl: ${standUrlVar},${hasBody ? `
+        requestBody: requestData,` : ''}
+        axiosConfig: ${axiosConfig},${use5xxEmailNotification ? `
+        sendEmailFn: ${emailMethodName}` : ''}
+      });
     }
 `;
     } else {
-      testCode += `      console.error('Response status:', error.response?.status);
+      // Fallback без apiTestHelper
+      testCode += `    } catch (error: any) {
+      console.error('❌ Ошибка при вызове endpoint:');
+      console.error('Endpoint:', actualEndpoint);
+      console.error('Method:', httpMethod);
+      console.error('Response status:', error.response?.status);
       console.error('Response data:', JSON.stringify(error.response?.data, null, 2));
       console.error('Error message:', error.message);
       throw error;
