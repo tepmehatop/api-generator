@@ -18,6 +18,68 @@ import { DTOInfo } from './dto-finder';
 const SORT_KEY_FIELDS = ['id', 'uuid', 'code', 'key', 'name', 'title'];
 
 /**
+ * Универсальная функция сравнения для сортировки
+ *
+ * Обрабатывает ВСЕ типы данных:
+ * - Числа: сортировка по числовому значению (1 < 3 < 5 < 44)
+ * - Строки: сортировка по алфавиту ("CREATED" < "DELIVERED" < "ORDERED")
+ * - Объекты с ключевыми полями: по значению ключевого поля
+ * - Объекты без ключевых полей: по хешу всех значений
+ * - null/undefined: в конец
+ *
+ * @param a - Первый элемент
+ * @param b - Второй элемент
+ * @returns -1, 0, или 1 для сортировки
+ */
+function universalCompare(a: any, b: any): number {
+  // null/undefined - в конец
+  if (a === null || a === undefined) return 1;
+  if (b === null || b === undefined) return -1;
+
+  const typeA = typeof a;
+  const typeB = typeof b;
+
+  // Оба числа - числовая сортировка
+  if (typeA === 'number' && typeB === 'number') {
+    return a - b;
+  }
+
+  // Оба строки - алфавитная сортировка
+  if (typeA === 'string' && typeB === 'string') {
+    return a.localeCompare(b);
+  }
+
+  // Оба boolean
+  if (typeA === 'boolean' && typeB === 'boolean') {
+    return (a === b) ? 0 : (a ? 1 : -1);
+  }
+
+  // Разные примитивные типы - конвертируем в строки
+  if (typeA !== 'object' && typeB !== 'object') {
+    return String(a).localeCompare(String(b));
+  }
+
+  // Оба объекты - используем ключевые поля или хеш
+  if (typeA === 'object' && typeB === 'object') {
+    const keyA = getObjectSortKey(a);
+    const keyB = getObjectSortKey(b);
+
+    // Если ключи - числа, сортируем как числа
+    const numA = Number(keyA);
+    const numB = Number(keyB);
+    if (!isNaN(numA) && !isNaN(numB)) {
+      return numA - numB;
+    }
+
+    return keyA.localeCompare(keyB);
+  }
+
+  // Объект vs примитив - примитив первым
+  if (typeA === 'object') return 1;
+  return -1;
+}
+
+/**
  * Создаёт ключ сортировки для объекта
  *
  * Стратегия:
@@ -30,11 +92,16 @@ const SORT_KEY_FIELDS = ['id', 'uuid', 'code', 'key', 'name', 'title'];
  */
 function getObjectSortKey(obj: any): string {
   if (obj === null || obj === undefined) {
-    return 'null';
+    return 'zzz_null'; // В конец при сортировке
   }
 
   if (typeof obj !== 'object') {
     return String(obj);
+  }
+
+  // Массив - хеш из элементов
+  if (Array.isArray(obj)) {
+    return obj.map(item => getObjectSortKey(item)).sort().join('|');
   }
 
   // Ищем ключевое поле
@@ -61,12 +128,28 @@ function getObjectSortKey(obj: any): string {
  * Рекурсивно сортирует все массивы в объекте
  *
  * Обрабатывает:
- * - Массивы на верхнем уровне
- * - Вложенные массивы внутри объектов
- * - Массивы внутри элементов массивов
+ * - Массивы примитивов: [3, 5, 1, 44] → [1, 3, 5, 44]
+ * - Массивы строк: ["ORDERED", "CREATED"] → ["CREATED", "ORDERED"]
+ * - Массивы объектов: сортировка по id/uuid/code/key/name/title
+ * - Вложенные массивы: рекурсивная обработка
  *
  * @param data - Данные для сортировки
  * @returns Копия данных с отсортированными массивами
+ *
+ * @example
+ * // Массив чисел
+ * sortArraysRecursively({ tags: [3, 5, 1, 44] })
+ * // → { tags: [1, 3, 5, 44] }
+ *
+ * @example
+ * // Массив строк
+ * sortArraysRecursively({ states: ["ORDERED", "CREATED", "TESTED"] })
+ * // → { states: ["CREATED", "ORDERED", "TESTED"] }
+ *
+ * @example
+ * // Массив объектов
+ * sortArraysRecursively({ items: [{ id: 3 }, { id: 1 }] })
+ * // → { items: [{ id: 1 }, { id: 3 }] }
  */
 export function sortArraysRecursively(data: any): any {
   if (data === null || data === undefined) {
@@ -83,12 +166,8 @@ export function sortArraysRecursively(data: any): any {
     // Сначала рекурсивно обрабатываем каждый элемент
     const processedItems = data.map(item => sortArraysRecursively(item));
 
-    // Сортируем массив по ключу
-    return [...processedItems].sort((a, b) => {
-      const keyA = getObjectSortKey(a);
-      const keyB = getObjectSortKey(b);
-      return keyA.localeCompare(keyB);
-    });
+    // Сортируем массив универсальной функцией
+    return [...processedItems].sort(universalCompare);
   }
 
   // Объект - рекурсивно обрабатываем каждое поле
