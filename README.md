@@ -2,7 +2,13 @@
 
 Комплексное решение для генерации TypeScript API клиентов из OpenAPI спецификаций + автоматическая генерация тестов Playwright + Happy Path тесты на основе реальных данных.
 
-## 🎉 Что нового в v14.1 (Текущая)
+## 🎉 Что нового в v14.2 (Текущая)
+
+- **🆔 Уникальные поля для POST**: Автоматическая генерация уникальных значений для полей `name`, `code`, `title` и т.д., чтобы избежать ошибок 400 "Уже существует"
+- **✅ Умная проверка уникальных полей**: Проверяется что бэкенд вернул именно те значения которые отправили (не исключаются из проверки!)
+- **🔠 Поддержка CAPS**: Параметр `uniqueFieldsUpperCase` для полей которые должны быть в ВЕРХНЕМ РЕГИСТРЕ (например `code`)
+
+## 📋 Что было в v14.1
 
 - **🔄 Реактуализация тестов**: Новый метод `reActualizeHappyPathTests()` для обновления тестовых данных
 - **📧 Email уведомления**: Отправка HTML писем при 5xx ошибках (500-503) в Happy Path тестах
@@ -400,6 +406,150 @@ console.log(`Пропущено: ${result.skippedTests}, Ошибок: ${result.
 }
 ```
 
+### 3.2 Уникальные поля для POST запросов - v14.2 ⭐ NEW
+
+При создании записей часто возникают ошибки 400 "Уже существует" из-за дублирования уникальных полей (`code`, `name`, `title` и т.д.).
+
+**Пример проблемы:**
+```
+POST /api/v1/orders/create
+body: {"id": null, "name": "test", "code":"TEST", "title": "ВВВ"}
+Response: {"errors": {"code": ["Уже существует"]}}
+```
+
+**Решение v14.2:** Автоматическое добавление уникального суффикса + умная проверка.
+
+```typescript
+await generateHappyPathTests({
+  outputDir: './tests/api/happy-path',
+
+  // v14.2: Уникальные поля
+  uniqueFields: ['name', 'code', 'title', 'email'],  // Поля для уникализации
+  uniqueFieldsUpperCase: ['code'],                   // Поля которые должны быть в CAPS
+  enableUniqueFieldGeneration: true,                 // Включить генерацию (по умолчанию true)
+
+}, sql);
+```
+
+**Как работает (3 этапа):**
+
+**Этап 1: Генерация уникальных значений перед отправкой**
+
+```javascript
+// Исходный request (из api_requests таблицы):
+const requestData = { "name": "test", "code": "TEST", "title": "ВВВ" };
+
+// Генерируем уникальный суффикс
+const uniqueSuffix = `_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+const modifiedUniqueFields = {}; // Сохраняем для проверки
+
+// Модифицируем поля (code в CAPS, остальные как есть)
+requestData.name = "test" + uniqueSuffix;           // "test_1707654321_abc12"
+modifiedUniqueFields.name = requestData.name;
+
+requestData.code = ("TEST" + uniqueSuffix).toUpperCase();  // "TEST_1707654321_ABC12" (CAPS!)
+modifiedUniqueFields.code = requestData.code;
+
+requestData.title = "ВВВ" + uniqueSuffix;           // "ВВВ_1707654321_abc12"
+modifiedUniqueFields.title = requestData.title;
+
+// Отправляем запрос
+const response = await axios.post(url, requestData, config);
+```
+
+**Этап 2: Проверка уникальных полей в response**
+
+```javascript
+// Проверяем что бэкенд вернул ИМЕННО ТЕ значения которые мы отправили
+// Если бэк вернул пустое значение или другое - тест УПАДЁТ!
+
+for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
+  const receivedValue = response.data[fieldName];
+  expect(receivedValue).toBe(sentValue);  // name === "test_1707654321_abc12"
+                                          // code === "TEST_1707654321_ABC12"
+                                          // title === "ВВВ_1707654321_abc12"
+}
+```
+
+**Этап 3: Сравнение остальных полей (без уникальных)**
+
+```javascript
+// Исключаем уникальные поля из ОБОИХ объектов
+const { name, code, title, ...expectedWithoutUnique } = normalizedExpected;
+const { name: _n, code: _c, title: _t, ...responseWithoutUnique } = response.data;
+
+// Сравниваем остальные поля как обычно
+const comparison = compareDbWithResponse(expectedWithoutUnique, responseWithoutUnique);
+expect(comparison.isEqual).toBe(true);
+```
+
+**Что проверяется:**
+
+| Проверка | Как работает |
+|----------|--------------|
+| ✅ Уникальные поля | `response.data.name === requestData.name` (тот же суффикс) |
+| ✅ Остальные поля | Полное сравнение с `normalizedExpected` (без уникальных) |
+| ✅ Пустые значения | Если бэк вернёт `name: null` - тест упадёт! |
+| ✅ Другие значения | Если бэк вернёт `name: "другое"` - тест упадёт! |
+
+**Параметры конфигурации:**
+
+| Параметр | Тип | По умолчанию | Описание |
+|----------|-----|--------------|----------|
+| `uniqueFields` | `string[]` | `['name', 'code', 'title']` | Поля для уникализации |
+| `uniqueFieldsUpperCase` | `string[]` | `['code']` | Поля в ВЕРХНЕМ РЕГИСТРЕ |
+| `enableUniqueFieldGeneration` | `boolean` | `true` | Включить/выключить |
+
+**Пример сгенерированного теста:**
+
+```typescript
+test(`POST Happy path #1 (201) @api @apiHappyPath`, async ({ page }, testInfo) => {
+  const requestData = { "name": "test", "code": "TEST", "title": "ВВВ", "price": 100 };
+  const normalizedExpected = { "id": 123, "name": "test", "code": "TEST", "title": "ВВВ", "price": 100 };
+
+  // Генерация уникальных значений
+  const uniqueSuffix = `_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const modifiedUniqueFields: Record<string, string> = {};
+
+  if (requestData.name && typeof requestData.name === 'string') {
+    requestData.name = requestData.name + uniqueSuffix;
+    modifiedUniqueFields['name'] = requestData.name;
+  }
+  if (requestData.code && typeof requestData.code === 'string') {
+    requestData.code = (requestData.code + uniqueSuffix).toUpperCase();  // CAPS!
+    modifiedUniqueFields['code'] = requestData.code;
+  }
+  if (requestData.title && typeof requestData.title === 'string') {
+    requestData.title = requestData.title + uniqueSuffix;
+    modifiedUniqueFields['title'] = requestData.title;
+  }
+
+  // Отправка запроса
+  const response = await axios.post(url, requestData, config);
+  expect(response.status).toBe(201);
+
+  // 1. Проверка уникальных полей - бэк должен вернуть то что отправили
+  for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
+    expect(response.data[fieldName]).toBe(sentValue);
+  }
+
+  // 2. Проверка остальных полей (price, id и т.д.)
+  const { name, code, title, ...expectedWithoutUnique } = normalizedExpected;
+  const { name: _n, code: _c, title: _t, ...responseWithoutUnique } = response.data;
+  const comparison = compareDbWithResponse(expectedWithoutUnique, responseWithoutUnique);
+  expect(comparison.isEqual).toBe(true);
+});
+```
+
+**Отключение:**
+
+```typescript
+await generateHappyPathTests({
+  outputDir: './tests/api/happy-path',
+  enableUniqueFieldGeneration: false,  // Не модифицировать поля
+}, sql);
+```
+
 ### 4. Анализ БД и генерация данных - v13.0
 
 ```typescript
@@ -586,7 +736,13 @@ await analyzeAndGenerateTestData({
 
 ## 📝 История версий
 
-### v14.1 (Текущая) ⭐
+### v14.2 (Текущая) ⭐
+- ✅ **Уникальные поля для POST**: Параметры `uniqueFields`, `uniqueFieldsUpperCase`, `enableUniqueFieldGeneration`
+- ✅ **Умная проверка**: Отдельная проверка уникальных полей (response должен содержать то что отправили)
+- ✅ **CAPS поддержка**: Поля вроде `code` автоматически конвертируются в ВЕРХНИЙ РЕГИСТР
+- ✅ **Полное покрытие**: Остальные поля проверяются без уникальных (исключаются из обоих объектов)
+
+### v14.1
 - ✅ **Реактуализация тестов**: Новый метод `reActualizeHappyPathTests()` для обновления данных
 - ✅ **Email уведомления 5xx**: HTML письма при серверных ошибках (500-503)
 - ✅ **CURL вывод**: При падении Happy Path теста выводится copyable CURL

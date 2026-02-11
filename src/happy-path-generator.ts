@@ -1,6 +1,6 @@
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 12.0 - ДЕДУПЛИКАЦИЯ И ВАЛИДАЦИЯ ДАННЫХ
+ * ВЕРСИЯ 14.2 - УНИКАЛЬНЫЕ ПОЛЯ ДЛЯ POST ЗАПРОСОВ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -16,8 +16,13 @@
  * 11. Динамический импорт compareDbWithResponse из NPM пакета (packageName)
  * 12. Реальный endpoint с подставленными ID вместо {id}
  * 13. Улучшенный вывод различий с цветами (блочный формат)
- * 14. НОВОЕ: Дедупликация тестов (Идея 1 + 2)
- * 15. НОВОЕ: Валидация данных (Стратегия 1 - проверка актуальности)
+ * 14. Дедупликация тестов (Идея 1 + 2)
+ * 15. Валидация данных (Стратегия 1 - проверка актуальности)
+ * 16. НОВОЕ v14.2: Уникальные поля для POST запросов (uniqueFields, uniqueFieldsUpperCase)
+ *     - Генерация уникальных суффиксов для избежания 400 "Уже существует"
+ *     - Отдельная проверка уникальных полей (response === request)
+ *     - Исключение уникальных полей из основного сравнения
+ *     - Поддержка CAPS полей (code → CODE_SUFFIX)
  */
 
 import * as fs from 'fs';
@@ -431,6 +436,51 @@ export interface HappyPathTestConfig {
    * @default false
    */
   debug?: boolean;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // НОВОЕ v14.2: УНИКАЛЬНЫЕ ПОЛЯ ДЛЯ POST ЗАПРОСОВ
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * НОВОЕ v14.2: Поля которые должны быть уникальными при POST/PUT/PATCH запросах
+   *
+   * ЗАЧЕМ ЭТО НУЖНО:
+   * При создании записей часто возникают ошибки 400 "Уже существует" из-за
+   * дублирования уникальных полей (code, name, title и т.д.)
+   *
+   * КАК РАБОТАЕТ:
+   * 1. К значениям указанных полей добавляется уникальный суффикс (timestamp + random)
+   * 2. Суффикс добавляется ТОЛЬКО если поле существует в requestBody и имеет строковое значение
+   * 3. Работает только для POST, PUT, PATCH запросов
+   *
+   * @example ['name', 'code', 'title', 'email']
+   * @default ['name', 'code', 'title']
+   *
+   * ПРИМЕР:
+   * Исходный request: { "name": "test", "code": "TEST", "title": "Тест" }
+   * После модификации: { "name": "test_1707654321_abc12", "code": "TEST_1707654321_abc12", "title": "Тест_1707654321_abc12" }
+   */
+  uniqueFields?: string[];
+
+  /**
+   * НОВОЕ v14.2: Включить автоматическую генерацию уникальных значений
+   * Если false - поля не модифицируются (используются как есть из api_requests)
+   * @default true
+   */
+  enableUniqueFieldGeneration?: boolean;
+
+  /**
+   * НОВОЕ v14.2: Поля которые должны быть в ВЕРХНЕМ РЕГИСТРЕ (CAPS)
+   * Суффикс будет добавлен и затем вся строка конвертирована в uppercase
+   *
+   * @example ['code', 'sku']
+   * @default ['code']
+   *
+   * ПРИМЕР:
+   * Исходный: { "code": "TEST" }
+   * Результат: { "code": "TEST_1707654321_ABC12" } (весь суффикс тоже в CAPS)
+   */
+  uniqueFieldsUpperCase?: string[];
 }
 
 interface UniqueRequest {
@@ -779,6 +829,10 @@ export class HappyPathTestGenerator {
       testImportPath: '@playwright/test',
       packageName: defaultPackageName,
       debug: false,
+      // НОВОЕ v14.2: Уникальные поля для POST запросов
+      uniqueFields: ['name', 'code', 'title'],
+      uniqueFieldsUpperCase: ['code'],
+      enableUniqueFieldGeneration: true,
       ...config,
 
       // НОВОЕ v12.0: Дефолтные настройки дедупликации
@@ -1475,6 +1529,36 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 `;
     }
 
+    // НОВОЕ v14.2: Генерация уникальных значений для полей (избегаем 400 "Уже существует")
+    const useUniqueFields = hasBody && this.config.enableUniqueFieldGeneration && this.config.uniqueFields.length > 0;
+    const uniqueFieldsList = this.config.uniqueFields;
+    const upperCaseFields = this.config.uniqueFieldsUpperCase;
+
+    if (useUniqueFields) {
+      testCode += `    // Генерация уникальных значений для избежания ошибок 400 "Уже существует"
+    const uniqueSuffix = \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
+    const modifiedUniqueFields: Record<string, string> = {}; // Сохраняем модифицированные значения для проверки
+`;
+      for (const field of uniqueFieldsList) {
+        const isUpperCase = upperCaseFields.includes(field);
+        if (isUpperCase) {
+          testCode += `    if (requestData.${field} && typeof requestData.${field} === 'string') {
+      requestData.${field} = (requestData.${field} + uniqueSuffix).toUpperCase();
+      modifiedUniqueFields['${field}'] = requestData.${field};
+    }
+`;
+        } else {
+          testCode += `    if (requestData.${field} && typeof requestData.${field} === 'string') {
+      requestData.${field} = requestData.${field} + uniqueSuffix;
+      modifiedUniqueFields['${field}'] = requestData.${field};
+    }
+`;
+        }
+      }
+      testCode += `
+`;
+    }
+
     // ИСПРАВЛЕНИЕ 4: Запрос через catch с детальным выводом
     testCode += `    let response;
 
@@ -1558,6 +1642,7 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     // ИСПРАВЛЕНИЕ 13: Улучшенный вывод различий с цветами (блочный формат)
     // НОВОЕ v14.1: При несовпадении выводим endpoint, метод и CURL для повторения
     // НОВОЕ v14.1: Пропускаем сравнение если ожидаемый response пустой (null, undefined, "")
+    // НОВОЕ v14.2: Отдельная проверка уникальных полей + исключение их из основного сравнения
     testCode += `
     // Проверка на пустой ожидаемый response - пропускаем сравнение данных
     const isEmptyExpected = normalizedExpected === null ||
@@ -1569,9 +1654,56 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
       // Для пустых response проверяем только что запрос успешен
       console.log('ℹ️ Ожидаемый response пустой - проверяем только статус код');
     } else {
-      // Глубокое сравнение (учитывает порядок в массивах)
-      const comparison = compareDbWithResponse(normalizedExpected, response.data);
+`;
 
+    // НОВОЕ v14.2: Добавляем проверку уникальных полей для POST/PUT/PATCH
+    if (useUniqueFields) {
+      testCode += `      // ═══════════════════════════════════════════════════════════════════════════
+      // v14.2: ПРОВЕРКА УНИКАЛЬНЫХ ПОЛЕЙ
+      // Проверяем что бэкенд вернул именно те значения которые мы отправили
+      // ═══════════════════════════════════════════════════════════════════════════
+      const uniqueFieldErrors: string[] = [];
+
+      for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
+        const receivedValue = response.data?.[fieldName];
+        if (receivedValue !== sentValue) {
+          uniqueFieldErrors.push(\`Поле '\${fieldName}': отправлено '\${sentValue}', получено '\${receivedValue}'\`);
+        }
+      }
+
+      if (uniqueFieldErrors.length > 0) {
+        console.error('❌ Несовпадение уникальных полей:');
+        uniqueFieldErrors.forEach(err => console.error('  - ' + err));
+      }
+      await expect(uniqueFieldErrors.length, 'Уникальные поля в response должны совпадать с отправленными').toBe(0);
+
+      // ═══════════════════════════════════════════════════════════════════════════
+      // v14.2: СРАВНЕНИЕ ОСТАЛЬНЫХ ПОЛЕЙ (без уникальных)
+      // Исключаем уникальные поля из обоих объектов перед сравнением
+      // ═══════════════════════════════════════════════════════════════════════════
+      const uniqueFieldNames = Object.keys(modifiedUniqueFields);
+
+      // Функция для удаления полей из объекта (shallow copy)
+      const removeFields = (obj: any, fields: string[]): any => {
+        if (!obj || typeof obj !== 'object') return obj;
+        const result = { ...obj };
+        fields.forEach(f => delete result[f]);
+        return result;
+      };
+
+      const expectedWithoutUnique = removeFields(normalizedExpected, uniqueFieldNames);
+      const responseWithoutUnique = removeFields(response.data, uniqueFieldNames);
+
+      // Глубокое сравнение остальных полей
+      const comparison = compareDbWithResponse(expectedWithoutUnique, responseWithoutUnique);
+`;
+    } else {
+      testCode += `      // Глубокое сравнение (учитывает порядок в массивах)
+      const comparison = compareDbWithResponse(normalizedExpected, response.data);
+`;
+    }
+
+    testCode += `
       if (!comparison.isEqual) {
         console.log(formatDifferencesAsBlocks(comparison.differences));
 
