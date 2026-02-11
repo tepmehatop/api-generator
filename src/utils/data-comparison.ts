@@ -14,8 +14,14 @@ import { DTOInfo } from './dto-finder';
 /**
  * Ключевые поля для определения уникальности объекта при сортировке
  * Порядок важен - первое найденное поле используется как ключ сортировки
+ *
+ * Расширенный список для покрытия большинства API:
+ * - id, uuid, guid - идентификаторы
+ * - code, key - коды/ключи
+ * - type, kind, category - типы/категории (для различения order/product/store)
+ * - name, title, label - названия
  */
-const SORT_KEY_FIELDS = ['id', 'uuid', 'code', 'key', 'name', 'title'];
+const SORT_KEY_FIELDS = ['id', 'uuid', 'guid', 'code', 'key', 'type', 'kind', 'category', 'name', 'title', 'label'];
 
 /**
  * Универсальная функция сравнения для сортировки
