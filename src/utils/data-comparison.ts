@@ -1,10 +1,103 @@
 /**
  * Утилиты для сравнения данных из БД с API response
+ * ВЕРСИЯ 14.1
  *
- * ИСПРАВЛЕНИЕ: Добавлена normalizeDbDataByDto для нормализации на основе типов из DTO
+ * ИСПРАВЛЕНИЯ:
+ * - normalizeDbDataByDto для нормализации на основе типов из DTO
+ * - НОВОЕ: Корректное сравнение массивов с игнорированием порядка элементов
+ * - НОВОЕ: Рекурсивная сортировка вложенных массивов
+ * - НОВОЕ: Сортировка по ключевым полям (id, code, uuid)
  */
 
 import { DTOInfo } from './dto-finder';
+
+/**
+ * Ключевые поля для определения уникальности объекта при сортировке
+ * Порядок важен - первое найденное поле используется как ключ сортировки
+ */
+const SORT_KEY_FIELDS = ['id', 'uuid', 'code', 'key', 'name', 'title'];
+
+/**
+ * Создаёт ключ сортировки для объекта
+ *
+ * Стратегия:
+ * 1. Ищем ключевое поле (id, uuid, code, key, name, title)
+ * 2. Если нашли - возвращаем его значение
+ * 3. Если не нашли - создаём хеш из всех полей объекта
+ *
+ * @param obj - Объект для создания ключа
+ * @returns Строка-ключ для сортировки
+ */
+function getObjectSortKey(obj: any): string {
+  if (obj === null || obj === undefined) {
+    return 'null';
+  }
+
+  if (typeof obj !== 'object') {
+    return String(obj);
+  }
+
+  // Ищем ключевое поле
+  for (const keyField of SORT_KEY_FIELDS) {
+    if (keyField in obj && obj[keyField] !== null && obj[keyField] !== undefined) {
+      return String(obj[keyField]);
+    }
+  }
+
+  // Если ключевого поля нет - создаём хеш из всех полей
+  // Сортируем ключи для стабильности
+  const sortedKeys = Object.keys(obj).sort();
+  const values = sortedKeys.map(k => {
+    const v = obj[k];
+    if (typeof v === 'object' && v !== null) {
+      return JSON.stringify(v);
+    }
+    return String(v);
+  });
+  return values.join('|');
+}
+
+/**
+ * Рекурсивно сортирует все массивы в объекте
+ *
+ * Обрабатывает:
+ * - Массивы на верхнем уровне
+ * - Вложенные массивы внутри объектов
+ * - Массивы внутри элементов массивов
+ *
+ * @param data - Данные для сортировки
+ * @returns Копия данных с отсортированными массивами
+ */
+export function sortArraysRecursively(data: any): any {
+  if (data === null || data === undefined) {
+    return data;
+  }
+
+  // Примитивные типы - возвращаем как есть
+  if (typeof data !== 'object') {
+    return data;
+  }
+
+  // Массив - сортируем и рекурсивно обрабатываем элементы
+  if (Array.isArray(data)) {
+    // Сначала рекурсивно обрабатываем каждый элемент
+    const processedItems = data.map(item => sortArraysRecursively(item));
+
+    // Сортируем массив по ключу
+    return [...processedItems].sort((a, b) => {
+      const keyA = getObjectSortKey(a);
+      const keyB = getObjectSortKey(b);
+      return keyA.localeCompare(keyB);
+    });
+  }
+
+  // Объект - рекурсивно обрабатываем каждое поле
+  const sorted: any = {};
+  for (const key of Object.keys(data)) {
+    sorted[key] = sortArraysRecursively(data[key]);
+  }
+  return sorted;
+}
 
 /**
  * Нормализует данные из БД (убирает экранирования, парсит JSON)
@@ -160,12 +253,25 @@ export function convertDataTypes(data: any): any {
 
 /**
  * Глубокое сравнение объектов с игнорированием порядка в массивах
+ *
+ * ВЕРСИЯ 14.1: Исправлено сравнение массивов объектов
+ * - Массивы сортируются рекурсивно ПЕРЕД сравнением
+ * - Сортировка по ключевым полям (id, uuid, code, key, name, title)
+ * - Если ключевого поля нет - создаётся хеш из всех полей
+ *
+ * @param actual - Фактические данные (с API)
+ * @param expected - Ожидаемые данные (тестовые данные)
+ * @returns Результат сравнения с массивом различий
  */
 export function deepCompareObjects(actual: any, expected: any): {
   isEqual: boolean;
   differences: string[];
 } {
   const differences: string[] = [];
+
+  // НОВОЕ v14.1: Сортируем ОБА объекта рекурсивно перед сравнением
+  const sortedActual = sortArraysRecursively(actual);
+  const sortedExpected = sortArraysRecursively(expected);
 
   function compare(act: any, exp: any, path: string = 'root'): boolean {
     // Проверка на null/undefined
@@ -195,7 +301,7 @@ export function deepCompareObjects(actual: any, expected: any): {
       return true;
     }
 
-    // Массивы - СОРТИРУЕМ перед сравнением
+    // Массивы - уже отсортированы, сравниваем последовательно
     if (Array.isArray(exp)) {
       if (!Array.isArray(act)) {
         differences.push(`${path}: expected array, got ${typeof act}`);
@@ -207,20 +313,10 @@ export function deepCompareObjects(actual: any, expected: any): {
         return false;
       }
 
-      // Сортируем массивы перед сравнением
-      const actSorted = [...act].sort((a, b) => {
-        if (typeof a === 'object') return 0;
-        return String(a).localeCompare(String(b));
-      });
-
-      const expSorted = [...exp].sort((a, b) => {
-        if (typeof a === 'object') return 0;
-        return String(a).localeCompare(String(b));
-      });
-
+      // Массивы уже отсортированы в sortArraysRecursively
       let allMatch = true;
-      for (let i = 0; i < expSorted.length; i++) {
-        if (!compare(actSorted[i], expSorted[i], `${path}[${i}]`)) {
+      for (let i = 0; i < exp.length; i++) {
+        if (!compare(act[i], exp[i], `${path}[${i}]`)) {
           allMatch = false;
         }
       }
@@ -247,7 +343,7 @@ export function deepCompareObjects(actual: any, expected: any): {
     return allMatch;
   }
 
-  const isEqual = compare(actual, expected);
+  const isEqual = compare(sortedActual, sortedExpected);
 
   return { isEqual, differences };
 }
