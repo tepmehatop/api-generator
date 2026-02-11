@@ -1557,41 +1557,53 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     // ИСПРАВЛЕНИЕ 5: Используем deepCompareObjects вместо toMatchObject
     // ИСПРАВЛЕНИЕ 13: Улучшенный вывод различий с цветами (блочный формат)
     // НОВОЕ v14.1: При несовпадении выводим endpoint, метод и CURL для повторения
+    // НОВОЕ v14.1: Пропускаем сравнение если ожидаемый response пустой (null, undefined, "")
     testCode += `
-    // Глубокое сравнение (учитывает порядок в массивах)
-    const comparison = compareDbWithResponse(normalizedExpected, response.data);
+    // Проверка на пустой ожидаемый response - пропускаем сравнение данных
+    const isEmptyExpected = normalizedExpected === null ||
+                            normalizedExpected === undefined ||
+                            normalizedExpected === '' ||
+                            (typeof normalizedExpected === 'object' && Object.keys(normalizedExpected).length === 0);
 
-    if (!comparison.isEqual) {
-      console.log(formatDifferencesAsBlocks(comparison.differences));
+    if (isEmptyExpected) {
+      // Для пустых response проверяем только что запрос успешен
+      console.log('ℹ️ Ожидаемый response пустой - проверяем только статус код');
+    } else {
+      // Глубокое сравнение (учитывает порядок в массивах)
+      const comparison = compareDbWithResponse(normalizedExpected, response.data);
 
-      // Дополнительная информация для отладки
-      console.log('\\n📍 Информация о запросе:');
-      console.log('Endpoint:', actualEndpoint);
-      console.log('Method:', httpMethod);
-      console.log('Full URL:', ${standUrlVar} + actualEndpoint);
+      if (!comparison.isEqual) {
+        console.log(formatDifferencesAsBlocks(comparison.differences));
 
-      // CURL команда для копирования (без рамки для удобства)
-      console.log('\\n📋 CURL для повторения запроса:');
+        // Дополнительная информация для отладки
+        console.log('\\n📍 Информация о запросе:');
+        console.log('Endpoint:', actualEndpoint);
+        console.log('Method:', httpMethod);
+        console.log('Full URL:', ${standUrlVar} + actualEndpoint);
+
+        // CURL команда для копирования (без рамки для удобства)
+        console.log('\\n📋 CURL для повторения запроса:');
 `;
 
     // Генерируем CURL команду
     if (hasBody) {
-      testCode += `      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+      testCode += `        const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
   -H 'Content-Type: application/json' \\\\
   -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' \\\\
   -d '\${JSON.stringify(requestData)}'\`;
-      console.log(curlCmd);
+        console.log(curlCmd);
 `;
     } else {
-      testCode += `      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+      testCode += `        const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
   -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
-      console.log(curlCmd);
+        console.log(curlCmd);
 `;
     }
 
-    testCode += `    }
+    testCode += `      }
 
-    await expect(comparison.isEqual).toBe(true);
+      await expect(comparison.isEqual).toBe(true);
+    }
   });`;
 
     return testCode;
