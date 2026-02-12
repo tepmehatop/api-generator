@@ -1,10 +1,11 @@
 /**
  * Утилиты для дедупликации Happy Path тестов
- * ВЕРСИЯ 12.0
+ * ВЕРСИЯ 14.5
  *
  * Реализует:
  * - Идея 1: Группировка по "signature" (игнорируем технические поля)
  * - Идея 2: Обнаружение edge cases (пустые массивы, null, редкие значения)
+ * - НОВОЕ v14.5: Дедупликация по request_body (игнорируя порядок полей)
  */
 
 export interface DeduplicationConfig {
@@ -30,6 +31,83 @@ export interface EdgeCaseInfo {
   type: 'empty_array' | 'null_field' | 'rare_value';
   path: string;
   value: any;
+}
+
+/**
+ * НОВОЕ v14.5: Нормализует объект для сравнения
+ * - Рекурсивно сортирует ключи объектов
+ * - Сортирует элементы массивов
+ * - Позволяет сравнивать request body независимо от порядка полей
+ *
+ * @example
+ * // Эти два объекта станут одинаковыми после нормализации:
+ * { "storeIds": [], "productsIds": [] }
+ * { "productsIds": [], "storeIds": [] }
+ */
+export function normalizeForComparison(data: any): any {
+  if (data === null || data === undefined) {
+    return data;
+  }
+
+  if (typeof data !== 'object') {
+    return data;
+  }
+
+  // Массив - сортируем элементы и рекурсивно нормализуем
+  if (Array.isArray(data)) {
+    const normalized = data.map(item => normalizeForComparison(item));
+    // Сортируем массив по JSON представлению элементов
+    return normalized.sort((a, b) => {
+      const strA = JSON.stringify(a);
+      const strB = JSON.stringify(b);
+      return strA.localeCompare(strB);
+    });
+  }
+
+  // Объект - сортируем ключи и рекурсивно нормализуем значения
+  const sorted: any = {};
+  const sortedKeys = Object.keys(data).sort();
+
+  for (const key of sortedKeys) {
+    sorted[key] = normalizeForComparison(data[key]);
+  }
+
+  return sorted;
+}
+
+/**
+ * НОВОЕ v14.5: Вычисляет signature запроса (endpoint + method + normalized body)
+ * Используется для дедупликации одинаковых запросов с разным порядком полей
+ */
+export function calculateRequestSignature(request: TestRequest): string {
+  const normalizedEndpoint = request.endpoint.replace(/\/\d+/g, '/{id}');
+  const normalizedBody = normalizeForComparison(request.request_body);
+
+  return `${request.method}:${normalizedEndpoint}:${JSON.stringify(normalizedBody)}`;
+}
+
+/**
+ * НОВОЕ v14.5: Удаляет дубликаты запросов по request body
+ * Запросы с одинаковым endpoint + method + body (независимо от порядка полей) считаются дубликатами
+ */
+export function deduplicateByRequestBody(requests: TestRequest[]): TestRequest[] {
+  const seen = new Map<string, TestRequest>();
+
+  for (const request of requests) {
+    const signature = calculateRequestSignature(request);
+
+    if (!seen.has(signature)) {
+      seen.set(signature, request);
+    }
+  }
+
+  const deduplicated = Array.from(seen.values());
+
+  if (deduplicated.length < requests.length) {
+    console.log(`🔄 Дедупликация по body: ${requests.length} → ${deduplicated.length} (удалено ${requests.length - deduplicated.length} дубликатов)`);
+  }
+
+  return deduplicated;
 }
 
 /**
@@ -391,6 +469,8 @@ export function selectBestTests(
 /**
  * Главная функция дедупликации
  * Принимает массив запросов, возвращает отфильтрованный массив
+ *
+ * НОВОЕ v14.5: Добавлена дедупликация по request_body (этап 0)
  */
 export function deduplicateTests(
   requests: TestRequest[],
@@ -402,8 +482,12 @@ export function deduplicateTests(
     return requests;
   }
 
-  // 1. Группируем по signature
-  const grouped = groupRequestsBySignature(requests, config);
+  // 0. НОВОЕ v14.5: Сначала удаляем дубликаты по request_body
+  // (одинаковый endpoint + method + body с разным порядком полей)
+  const withoutBodyDuplicates = deduplicateByRequestBody(requests);
+
+  // 1. Группируем по signature (response)
+  const grouped = groupRequestsBySignature(withoutBodyDuplicates, config);
 
   // 2. Из каждой группы выбираем лучшие тесты
   const deduplicated: TestRequest[] = [];
@@ -414,7 +498,8 @@ export function deduplicateTests(
   }
 
   console.log(`🔍 Дедупликация: ${requests.length} → ${deduplicated.length} тестов`);
-  console.log(`   Уникальных signatures: ${grouped.size}`);
+  console.log(`   После удаления дубликатов body: ${withoutBodyDuplicates.length}`);
+  console.log(`   Уникальных response signatures: ${grouped.size}`);
 
   return deduplicated;
 }

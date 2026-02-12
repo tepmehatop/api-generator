@@ -1,11 +1,20 @@
 /**
  * Утилиты для валидации данных Happy Path тестов
- * ВЕРСИЯ 12.0
+ * ВЕРСИЯ 14.4
  *
  * Решает проблему "stale data" (устаревшие данные):
  * - Проверяет актуальность данных перед генерацией
  * - Обнаруживает изменения в значимых полях (status, state, type)
  * - Обновляет или удаляет устаревшие тесты
+ *
+ * НОВОЕ v14.3:
+ * - Сбор 422 ошибок с детальными сообщениями для генерации тестов валидации
+ * - Пропуск и логирование "Bad Request" без детализации
+ *
+ * НОВОЕ v14.4:
+ * - Сбор 400 ошибок "Уже существует" для генерации парных тестов
+ * - Негативный тест: оригинальные данные → 400 + проверка сообщения
+ * - Позитивный тест: данные с uniqueFields → 2xx + проверка response
  */
 
 import * as fs from 'fs';
@@ -59,6 +68,74 @@ export interface ValidationConfig {
    * Альтернатива emailHelperPath - можно передать функцию напрямую
    */
   emailSendFunction?: (html: string) => Promise<void>;
+
+  // НОВОЕ v14.3: Сбор 422 ошибок для генерации тестов валидации
+  /**
+   * Включить сбор 422 ошибок для генерации тестов валидации
+   * @default false
+   */
+  collect422Errors?: boolean;
+
+  /**
+   * Путь к JSON файлу для логирования пропущенных "Bad Request" ответов
+   * @example './validation-errors/422-bad-request-skipped.json'
+   */
+  badRequestSkipLogPath?: string;
+
+  /**
+   * Паттерны сообщений которые считаются "пустыми" и пропускаются
+   * @default ['Bad Request', 'Validation failed', '']
+   */
+  skipMessagePatterns?: string[];
+
+  // НОВОЕ v14.4: Сбор 400 ошибок для генерации парных тестов
+  /**
+   * Включить сбор 400 ошибок для генерации тестов на дубликаты
+   * @default false
+   */
+  collect400Errors?: boolean;
+
+  /**
+   * Путь к JSON файлу для логирования пропущенных 400 "Bad Request" ответов
+   * @example './validation-errors/400-bad-request-skipped.json'
+   */
+  badRequest400SkipLogPath?: string;
+
+  /**
+   * Паттерны сообщений для 400 которые считаются "пустыми" и пропускаются
+   * @default ['Bad Request', '']
+   */
+  skip400MessagePatterns?: string[];
+}
+
+/**
+ * НОВОЕ v14.3: Структура 422 ошибки для генерации тестов
+ */
+export interface Validation422Error {
+  requestId: number;
+  endpoint: string;
+  method: string;
+  requestBody: any;
+  responseStatus: 422;
+  responseData: any;
+  detailMessage: string;
+  testName?: string;
+}
+
+/**
+ * НОВОЕ v14.4: Структура 400 ошибки для генерации парных тестов (негатив + позитив)
+ */
+export interface Duplicate400Error {
+  requestId: number;
+  endpoint: string;
+  method: string;
+  requestBody: any;
+  expectedResponseBody: any; // Ожидаемый успешный response (из БД)
+  expectedStatus: number; // Ожидаемый успешный статус (201, 200)
+  responseStatus: 400;
+  responseData: any;
+  detailMessage: string; // Сообщение из response (например "Уже существует")
+  testName?: string;
 }
 
 /**
@@ -95,6 +172,12 @@ export interface ValidationResult {
   changes: FieldChange[];
   updatedResponse?: any;
   action: 'keep' | 'update' | 'delete' | 'skip';
+  // НОВОЕ v14.3: Информация о 422 ошибке
+  is422Error?: boolean;
+  errorResponseData?: any;
+  // НОВОЕ v14.4: Информация о 400 ошибке
+  is400Error?: boolean;
+  errorCode?: number;
 }
 
 export interface FieldChange {
@@ -362,15 +445,20 @@ export async function validateRequest(
     // НОВОЕ v14.1: Логирование ошибок в файлы
     const isServerError = errorCode >= 500 && errorCode <= 599;
     const isClientError = errorCode >= 400 && errorCode <= 499;
+    // НОВОЕ v14.3: Отдельная обработка 422 ошибок
+    const is422Error = errorCode === 422;
+    // НОВОЕ v14.4: Отдельная обработка 400 ошибок
+    const is400Error = errorCode === 400;
 
     if (isServerError) {
       // 5xx ошибки - логируем в отдельный файл + отправляем email
       await logValidationError(request, errorCode, errorMessage, responseData, config, true);
       await sendServerErrorEmail(request, errorCode, errorMessage, responseData, config);
-    } else if (isClientError) {
-      // 4xx ошибки - логируем в файл клиентских ошибок
+    } else if (isClientError && !is422Error && !is400Error) {
+      // 4xx ошибки (кроме 422 и 400) - логируем в файл клиентских ошибок
       await logValidationError(request, errorCode, errorMessage, responseData, config, false);
     }
+    // 422 и 400 ошибки обрабатываются отдельно в validateRequests
 
     // При ошибке API считаем данные устаревшими
     return {
@@ -382,7 +470,13 @@ export async function validateRequest(
         newValue: null,
         isSignificant: true
       }],
-      action: config.onStaleData === 'delete' ? 'delete' : 'skip'
+      action: config.onStaleData === 'delete' ? 'delete' : 'skip',
+      // НОВОЕ v14.3: Маркируем 422 ошибки для сбора
+      is422Error: is422Error,
+      // НОВОЕ v14.4: Маркируем 400 ошибки для сбора
+      is400Error: is400Error,
+      errorCode: errorCode,
+      errorResponseData: (is422Error || is400Error) ? responseData : undefined
     };
   }
 }
@@ -646,6 +740,9 @@ async function sendServerErrorEmail(
 /**
  * Валидирует массив requests
  * Возвращает только валидные или обновленные requests
+ *
+ * НОВОЕ v14.3: Также собирает 422 ошибки с детальными сообщениями
+ * НОВОЕ v14.4: Также собирает 400 ошибки для парных тестов (негатив + позитив)
  */
 export async function validateRequests(
   requests: TestRequest[],
@@ -656,13 +753,23 @@ export async function validateRequests(
   deletedCount: number;
   updatedCount: number;
   skippedCount: number;
+  // НОВОЕ v14.3: 422 ошибки для генерации тестов валидации
+  validation422Errors: Validation422Error[];
+  badRequestSkippedCount: number;
+  // НОВОЕ v14.4: 400 ошибки для генерации парных тестов
+  duplicate400Errors: Duplicate400Error[];
+  badRequest400SkippedCount: number;
 }> {
   if (!config.enabled || !config.validateBeforeGeneration) {
     return {
       validRequests: requests,
       deletedCount: 0,
       updatedCount: 0,
-      skippedCount: 0
+      skippedCount: 0,
+      validation422Errors: [],
+      badRequestSkippedCount: 0,
+      duplicate400Errors: [],
+      badRequest400SkippedCount: 0
     };
   }
 
@@ -670,6 +777,16 @@ export async function validateRequests(
   let deletedCount = 0;
   let updatedCount = 0;
   let skippedCount = 0;
+
+  // НОВОЕ v14.3: Сбор 422 ошибок
+  const validation422Errors: Validation422Error[] = [];
+  let badRequestSkippedCount = 0;
+  const skipPatterns = config.skipMessagePatterns || ['Bad Request', 'Validation failed', ''];
+
+  // НОВОЕ v14.4: Сбор 400 ошибок для парных тестов
+  const duplicate400Errors: Duplicate400Error[] = [];
+  let badRequest400SkippedCount = 0;
+  const skip400Patterns = config.skip400MessagePatterns || ['Bad Request', ''];
 
   console.log(`\n🔍 Валидация ${requests.length} запросов...`);
 
@@ -696,6 +813,68 @@ export async function validateRequests(
       console.log(`  ⏭️  Пропущен: ${request.method} ${request.endpoint} (ID: ${request.id})`);
     }
 
+    // НОВОЕ v14.3: Обработка 422 ошибок
+    if (result.is422Error && config.collect422Errors) {
+      const detailMessage = extract422DetailMessage(result.errorResponseData);
+
+      // Проверяем, является ли сообщение "пустым" (Bad Request и т.д.)
+      const isSkipMessage = skipPatterns.some(pattern =>
+        !detailMessage || detailMessage.trim() === '' || detailMessage.includes(pattern)
+      );
+
+      if (isSkipMessage) {
+        // Логируем в файл пропущенных Bad Request
+        badRequestSkippedCount++;
+        await logBadRequestSkipped(request, result.errorResponseData, config);
+        console.log(`  ⏭️  422 Bad Request (пропущен): ${request.method} ${request.endpoint}`);
+      } else {
+        // Собираем для генерации тестов
+        validation422Errors.push({
+          requestId: request.id,
+          endpoint: request.endpoint,
+          method: request.method,
+          requestBody: request.request_body,
+          responseStatus: 422,
+          responseData: result.errorResponseData,
+          detailMessage: detailMessage,
+          testName: request.test_name
+        });
+        console.log(`  📋 422 с детализацией: ${request.method} ${request.endpoint} - "${detailMessage.substring(0, 50)}..."`);
+      }
+    }
+
+    // НОВОЕ v14.4: Обработка 400 ошибок (для парных тестов негатив + позитив)
+    if (result.is400Error && config.collect400Errors) {
+      const detailMessage = extract400DetailMessage(result.errorResponseData);
+
+      // Проверяем, является ли сообщение "пустым" (Bad Request без детализации)
+      const isSkip400Message = skip400Patterns.some(pattern =>
+        !detailMessage || detailMessage.trim() === '' || detailMessage.includes(pattern)
+      );
+
+      if (isSkip400Message) {
+        // Логируем в файл пропущенных 400 Bad Request
+        badRequest400SkippedCount++;
+        await log400BadRequestSkipped(request, result.errorResponseData, config);
+        console.log(`  ⏭️  400 Bad Request (пропущен): ${request.method} ${request.endpoint}`);
+      } else {
+        // Собираем для генерации парных тестов (негатив 400 + позитив с unique)
+        duplicate400Errors.push({
+          requestId: request.id,
+          endpoint: request.endpoint,
+          method: request.method,
+          requestBody: request.request_body,
+          expectedResponseBody: request.response_body, // Ожидаемый успешный response из БД
+          expectedStatus: request.response_status, // Ожидаемый успешный статус (201, 200)
+          responseStatus: 400,
+          responseData: result.errorResponseData,
+          detailMessage: detailMessage, // Актуальное сообщение из API
+          testName: request.test_name
+        });
+        console.log(`  📋 400 с детализацией: ${request.method} ${request.endpoint} - "${detailMessage.substring(0, 50)}..."`);
+      }
+    }
+
     // Небольшая задержка чтобы не перегружать API
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -706,10 +885,244 @@ export async function validateRequests(
   console.log(`   Удалено: ${deletedCount}`);
   console.log(`   Пропущено: ${skippedCount}`);
 
+  // НОВОЕ v14.3: Статистика 422 ошибок
+  if (config.collect422Errors) {
+    console.log(`\n📋 422 ошибки:`);
+    console.log(`   Для тестов валидации: ${validation422Errors.length}`);
+    console.log(`   Bad Request (пропущено): ${badRequestSkippedCount}`);
+  }
+
+  // НОВОЕ v14.4: Статистика 400 ошибок
+  if (config.collect400Errors) {
+    console.log(`\n📋 400 ошибки (дубликаты):`);
+    console.log(`   Для парных тестов: ${duplicate400Errors.length}`);
+    console.log(`   Bad Request (пропущено): ${badRequest400SkippedCount}`);
+  }
+
   return {
     validRequests,
     deletedCount,
     updatedCount,
-    skippedCount
+    skippedCount,
+    validation422Errors,
+    badRequestSkippedCount,
+    duplicate400Errors,
+    badRequest400SkippedCount
   };
+}
+
+/**
+ * НОВОЕ v14.3: Извлекает детальное сообщение из 422 ответа
+ */
+function extract422DetailMessage(responseData: any): string {
+  if (!responseData) return '';
+
+  // Типичные форматы ответов:
+  // { "detail": "..." }
+  // { "message": "..." }
+  // { "error": "..." }
+  // { "errors": [...] }
+  // { "detail": { "message": "..." } }
+
+  if (typeof responseData === 'string') return responseData;
+
+  if (responseData.detail) {
+    if (typeof responseData.detail === 'string') return responseData.detail;
+    if (typeof responseData.detail === 'object' && responseData.detail.message) {
+      return responseData.detail.message;
+    }
+    return JSON.stringify(responseData.detail);
+  }
+
+  if (responseData.message) return responseData.message;
+  if (responseData.error) return responseData.error;
+
+  if (responseData.errors && Array.isArray(responseData.errors)) {
+    return responseData.errors.map((e: any) => e.message || e.msg || JSON.stringify(e)).join('; ');
+  }
+
+  return JSON.stringify(responseData);
+}
+
+/**
+ * НОВОЕ v14.4: Извлекает детальное сообщение из 400 ответа
+ */
+function extract400DetailMessage(responseData: any): string {
+  if (!responseData) return '';
+
+  // Типичные форматы ответов для 400 "Уже существует":
+  // { "detail": "Уже существует" }
+  // { "message": "Объект с таким именем уже существует" }
+  // { "error": "Duplicate entry" }
+
+  if (typeof responseData === 'string') return responseData;
+
+  if (responseData.detail) {
+    if (typeof responseData.detail === 'string') return responseData.detail;
+    if (typeof responseData.detail === 'object' && responseData.detail.message) {
+      return responseData.detail.message;
+    }
+    return JSON.stringify(responseData.detail);
+  }
+
+  if (responseData.message) return responseData.message;
+  if (responseData.error) return responseData.error;
+
+  if (responseData.errors && Array.isArray(responseData.errors)) {
+    return responseData.errors.map((e: any) => e.message || e.msg || JSON.stringify(e)).join('; ');
+  }
+
+  return JSON.stringify(responseData);
+}
+
+/**
+ * НОВОЕ v14.4: Логирует пропущенный 400 Bad Request в JSON файл
+ */
+async function log400BadRequestSkipped(
+  request: TestRequest,
+  responseData: any,
+  config: ValidationConfig
+): Promise<void> {
+  const logPath = config.badRequest400SkipLogPath;
+  if (!logPath) return;
+
+  try {
+    const logDir = path.dirname(logPath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+
+    const now = new Date();
+    const fullUrl = (config.standUrl || '') + request.endpoint;
+
+    const skipEntry = {
+      timestamp: now.toISOString(),
+      timestampMsk: now.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' (МСК)',
+      endpoint: request.endpoint,
+      method: request.method,
+      fullUrl,
+      requestBody: request.request_body,
+      responseData,
+      curlCommand: generateCurlCommand(request.method, fullUrl, request.request_body, config.axiosConfig),
+      requestId: request.id,
+      testName: request.test_name
+    };
+
+    // Читаем существующий файл или создаем новую структуру
+    let skipLog: {
+      generatedAt: string;
+      lastUpdated: string;
+      description: string;
+      totalSkipped: number;
+      skippedRequests: any[];
+    };
+
+    if (fs.existsSync(logPath)) {
+      try {
+        const content = fs.readFileSync(logPath, 'utf-8');
+        skipLog = JSON.parse(content);
+        skipLog.lastUpdated = now.toISOString();
+      } catch {
+        skipLog = {
+          generatedAt: now.toISOString(),
+          lastUpdated: now.toISOString(),
+          description: '400 Bad Request без детализации - пропущены при генерации тестов на дубликаты',
+          totalSkipped: 0,
+          skippedRequests: []
+        };
+      }
+    } else {
+      skipLog = {
+        generatedAt: now.toISOString(),
+        lastUpdated: now.toISOString(),
+        description: '400 Bad Request без детализации - пропущены при генерации тестов на дубликаты',
+        totalSkipped: 0,
+        skippedRequests: []
+      };
+    }
+
+    skipLog.skippedRequests.push(skipEntry);
+    skipLog.totalSkipped = skipLog.skippedRequests.length;
+
+    fs.writeFileSync(logPath, JSON.stringify(skipLog, null, 2), 'utf-8');
+
+  } catch (error) {
+    console.error('❌ Ошибка при логировании пропущенного 400 Bad Request:', error);
+  }
+}
+
+/**
+ * НОВОЕ v14.3: Логирует пропущенный Bad Request в JSON файл
+ */
+async function logBadRequestSkipped(
+  request: TestRequest,
+  responseData: any,
+  config: ValidationConfig
+): Promise<void> {
+  const logPath = config.badRequestSkipLogPath;
+  if (!logPath) return;
+
+  try {
+    const logDir = path.dirname(logPath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+
+    const now = new Date();
+    const fullUrl = (config.standUrl || '') + request.endpoint;
+
+    const skipEntry = {
+      timestamp: now.toISOString(),
+      timestampMsk: now.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' (МСК)',
+      endpoint: request.endpoint,
+      method: request.method,
+      fullUrl,
+      requestBody: request.request_body,
+      responseData,
+      curlCommand: generateCurlCommand(request.method, fullUrl, request.request_body, config.axiosConfig),
+      requestId: request.id,
+      testName: request.test_name
+    };
+
+    // Читаем существующий файл или создаем новую структуру
+    let skipLog: {
+      generatedAt: string;
+      lastUpdated: string;
+      description: string;
+      totalSkipped: number;
+      skippedRequests: any[];
+    };
+
+    if (fs.existsSync(logPath)) {
+      try {
+        const content = fs.readFileSync(logPath, 'utf-8');
+        skipLog = JSON.parse(content);
+        skipLog.lastUpdated = now.toISOString();
+      } catch {
+        skipLog = {
+          generatedAt: now.toISOString(),
+          lastUpdated: now.toISOString(),
+          description: '422 Bad Request без детализации - пропущены при генерации тестов валидации',
+          totalSkipped: 0,
+          skippedRequests: []
+        };
+      }
+    } else {
+      skipLog = {
+        generatedAt: now.toISOString(),
+        lastUpdated: now.toISOString(),
+        description: '422 Bad Request без детализации - пропущены при генерации тестов валидации',
+        totalSkipped: 0,
+        skippedRequests: []
+      };
+    }
+
+    skipLog.skippedRequests.push(skipEntry);
+    skipLog.totalSkipped = skipLog.skippedRequests.length;
+
+    fs.writeFileSync(logPath, JSON.stringify(skipLog, null, 2), 'utf-8');
+
+  } catch (error) {
+    console.error('❌ Ошибка при логировании пропущенного Bad Request:', error);
+  }
 }
