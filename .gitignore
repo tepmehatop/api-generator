@@ -3,6 +3,7 @@
 
 # Личные данные и скрипты
 CHAT_CONTEXT_EXPORT.md
+DEVELOPMENT_CONTEXT.md
 auto-commit.sh
 *.local.sh
 *.personal.*
