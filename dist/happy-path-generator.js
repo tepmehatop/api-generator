@@ -1,7 +1,7 @@
 "use strict";
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 12.0 - ДЕДУПЛИКАЦИЯ И ВАЛИДАЦИЯ ДАННЫХ
+ * ВЕРСИЯ 14.5.1 - ИСПРАВЛЕНИЯ БАГОВ ГЕНЕРАЦИИ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -17,8 +17,23 @@
  * 11. Динамический импорт compareDbWithResponse из NPM пакета (packageName)
  * 12. Реальный endpoint с подставленными ID вместо {id}
  * 13. Улучшенный вывод различий с цветами (блочный формат)
- * 14. НОВОЕ: Дедупликация тестов (Идея 1 + 2)
- * 15. НОВОЕ: Валидация данных (Стратегия 1 - проверка актуальности)
+ * 14. Дедупликация тестов (Идея 1 + 2)
+ * 15. Валидация данных (Стратегия 1 - проверка актуальности)
+ * 16. v14.2: Уникальные поля для POST запросов (uniqueFields, uniqueFieldsUpperCase)
+ *     - Генерация уникальных суффиксов для избежания 400 "Уже существует"
+ *     - Отдельная проверка уникальных полей (response === request)
+ *     - Исключение уникальных полей из основного сравнения
+ *     - Поддержка CAPS полей (code → CODE_SUFFIX)
+ * 17. НОВОЕ v14.3: Тесты на валидацию (422 ошибки)
+ *     - Сбор 422 ответов с детальными сообщениями во время валидации
+ *     - Пропуск "Bad Request" без детализации (логирование в отдельный JSON)
+ *     - Генерация тестов в отдельную папку с проверкой статуса и сообщения
+ *     - Тестовые данные в папке test-data (как Happy Path)
+ * 18. НОВОЕ v14.4: Парные тесты на дубликаты (400 ошибки)
+ *     - Негативный тест: оригинальные данные → 400 + проверка ТОЧНОГО сообщения
+ *     - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+ *     - 3 независимые папки: happy-path, validation-tests (422), negative-400
+ *     - Сообщение берётся из реального response (не хардкод!)
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -66,6 +81,7 @@ const dto_finder_1 = require("./utils/dto-finder");
 const data_comparison_1 = require("./utils/data-comparison");
 const test_deduplication_1 = require("./utils/test-deduplication");
 const data_validation_1 = require("./utils/data-validation");
+const test_helpers_generator_1 = require("./utils/test-helpers-generator");
 const axios_1 = __importDefault(require("axios"));
 /**
  * НОВОЕ v13.0: Рекурсивный поиск файла в директории
@@ -368,6 +384,10 @@ class HappyPathTestGenerator {
             testImportPath: '@playwright/test',
             packageName: defaultPackageName,
             debug: false,
+            // НОВОЕ v14.2: Уникальные поля для POST запросов
+            uniqueFields: ['name', 'code', 'title'],
+            uniqueFieldsUpperCase: ['code'],
+            enableUniqueFieldGeneration: true,
             ...config,
             // НОВОЕ v12.0: Дефолтные настройки дедупликации
             deduplication: {
@@ -394,6 +414,30 @@ class HappyPathTestGenerator {
                 serverErrorsLogPath: './validation-errors/5xx-server-errors.json',
                 sendServerErrorEmail: false,
                 ...(config.dataValidation || {})
+            },
+            // НОВОЕ v14.3: Дефолтные настройки генерации тестов на валидацию (422)
+            validationTests: {
+                enabled: false, // По умолчанию выключено
+                outputDir: '../validation-tests',
+                badRequestSkipLogPath: './validation-errors/422-bad-request-skipped.json',
+                createSeparateDataFiles: true,
+                groupByCategory: true,
+                testTag: '@apiValidation',
+                maxTestsPerEndpoint: 3,
+                skipMessagePatterns: ['Bad Request', 'Validation failed', ''],
+                ...(config.validationTests || {})
+            },
+            // НОВОЕ v14.4: Дефолтные настройки генерации тестов на 400 дубликаты
+            duplicateTests: {
+                enabled: false, // По умолчанию выключено
+                outputDir: './tests/api/negative-400',
+                badRequestSkipLogPath: './validation-errors/400-bad-request-skipped.json',
+                createSeparateDataFiles: true,
+                groupByCategory: true,
+                testTag: '@negative400Validation',
+                maxTestsPerEndpoint: 2,
+                skipMessagePatterns: ['Bad Request', ''],
+                ...(config.duplicateTests || {})
             }
         };
         // НОВОЕ v14.0: Поддержка двух подключений к БД
@@ -525,6 +569,7 @@ class HappyPathTestGenerator {
                 // Обновляем конфиг валидации с правильными настройками
                 // НОВОЕ v14.0: Используем основные настройки axios из конфига (без дублирования)
                 // НОВОЕ v14.1: Добавляем логирование ошибок и email для 5xx
+                // НОВОЕ v14.3: Добавляем сбор 422 ошибок для генерации тестов валидации
                 const validationConfig = {
                     ...this.config.dataValidation,
                     standUrl: standUrl,
@@ -532,7 +577,15 @@ class HappyPathTestGenerator {
                     // НОВОЕ v14.1: Передаём функцию отправки email если настроена
                     emailSendFunction: this.config.send5xxEmailNotification && this.config.emailHelperPath
                         ? await this.loadEmailSendFunction()
-                        : undefined
+                        : undefined,
+                    // НОВОЕ v14.3: Сбор 422 ошибок
+                    collect422Errors: this.config.validationTests.enabled,
+                    badRequestSkipLogPath: this.config.validationTests.badRequestSkipLogPath,
+                    skipMessagePatterns: this.config.validationTests.skipMessagePatterns,
+                    // НОВОЕ v14.4: Сбор 400 ошибок для парных тестов
+                    collect400Errors: this.config.duplicateTests.enabled,
+                    badRequest400SkipLogPath: this.config.duplicateTests.badRequestSkipLogPath,
+                    skip400MessagePatterns: this.config.duplicateTests.skipMessagePatterns
                 };
                 if (this.config.debug) {
                     console.log(`🐛 Конфиг валидации:`, {
@@ -560,6 +613,25 @@ class HappyPathTestGenerator {
                 }
                 if (validationResult.skippedCount > 0) {
                     console.log(`   Пропущено: ${validationResult.skippedCount}`);
+                }
+                // НОВОЕ v14.3: Генерируем тесты на валидацию (422 ошибки)
+                if (this.config.debug || validationResult.validation422Errors.length > 0 || validationResult.duplicate400Errors.length > 0) {
+                    console.log(`\n📋 Собранные ошибки для генерации тестов:`);
+                    console.log(`   422 ошибок: ${validationResult.validation422Errors.length} (генерация: ${this.config.validationTests.enabled ? 'ВКЛ' : 'ВЫКЛ'})`);
+                    console.log(`   400 ошибок: ${validationResult.duplicate400Errors.length} (генерация: ${this.config.duplicateTests.enabled ? 'ВКЛ' : 'ВЫКЛ'})`);
+                }
+                if (this.config.validationTests.enabled && validationResult.validation422Errors.length > 0) {
+                    await this.generateValidation422Tests(validationResult.validation422Errors);
+                }
+                else if (this.config.validationTests.enabled && validationResult.validation422Errors.length === 0) {
+                    console.log(`   ⚠️  422 тесты включены, но ошибок не найдено`);
+                }
+                // НОВОЕ v14.4: Генерируем парные тесты на дубликаты (400 ошибки)
+                if (this.config.duplicateTests.enabled && validationResult.duplicate400Errors.length > 0) {
+                    await this.generate400DuplicateTests(validationResult.duplicate400Errors);
+                }
+                else if (this.config.duplicateTests.enabled && validationResult.duplicate400Errors.length === 0) {
+                    console.log(`   ⚠️  400 тесты включены, но ошибок не найдено`);
                 }
             }
             catch (error) {
@@ -787,14 +859,13 @@ class HappyPathTestGenerator {
         if (this.config.axiosConfigPath && this.config.axiosConfigName) {
             imports.push(`import { ${this.config.axiosConfigName} } from '${this.config.axiosConfigPath}';`);
         }
-        // НОВОЕ v14.0: Импорт apiTestHelper для детализации ошибок
+        // НОВОЕ v14.1: Импорт handleApiError из apiTestHelper (содержит email логику внутри)
         if (this.config.apiTestHelperPath) {
-            imports.push(`import { getMessageFromError } from '${this.config.apiTestHelperPath}';`);
+            imports.push(`import { handleApiError } from '${this.config.apiTestHelperPath}';`);
         }
-        // НОВОЕ v14.1: Импорт для email уведомлений о 5xx ошибках
+        // НОВОЕ v14.1: Импорт функции отправки email если настроена
         if (this.config.send5xxEmailNotification && this.config.emailHelperPath) {
             imports.push(`import { ${this.config.emailHelperMethodName} } from '${this.config.emailHelperPath}';`);
-            imports.push(`import { generateErrorEmailHtml } from '${this.config.packageName}/dist/utils/error-notification';`);
         }
         // ИСПРАВЛЕНИЕ 10: Импорт DTO
         // ИСПРАВЛЕНИЕ v14.1: Используем переданный outputDir для корректного относительного пути
@@ -805,6 +876,8 @@ class HappyPathTestGenerator {
         // ИСПРАВЛЕНИЕ 9: Импорты нормализованных данных
         if (this.config.createSeparateDataFiles) {
             const fileName = this.endpointToFileName(endpoint, method);
+            // НОВОЕ v14.5: Импорт helper функций (включая formatDifferencesAsBlocks)
+            imports.push(`import { prepareUniqueFields, buildCurlCommand, compareWithoutUniqueFields, verifyUniqueFields, formatDifferencesAsBlocks } from './test-data/test-helpers';`);
             for (let i = 0; i < requests.length; i++) {
                 imports.push(`import { requestData as requestData${i + 1}, normalizedExpectedResponse as normalizedExpectedResponse${i + 1} } from './test-data/${fileName}-data-${i + 1}';`);
             }
@@ -863,6 +936,17 @@ ${tests.join('\n\n')}
         if (!fs.existsSync(dataDir)) {
             fs.mkdirSync(dataDir, { recursive: true });
         }
+        // НОВОЕ v14.5: Генерируем файл с helper функциями (один раз на папку)
+        const helpersFilePath = path.join(dataDir, 'test-helpers.ts');
+        if (!fs.existsSync(helpersFilePath)) {
+            const helpersConfig = {
+                uniqueFields: this.config.uniqueFields,
+                uniqueFieldsUpperCase: this.config.uniqueFieldsUpperCase,
+                packageName: this.config.packageName
+            };
+            const helpersCode = (0, test_helpers_generator_1.generateTestHelpersCode)(helpersConfig);
+            fs.writeFileSync(helpersFilePath, helpersCode, 'utf-8');
+        }
         for (let i = 0; i < requests.length; i++) {
             const request = requests[i];
             const dataFileName = `${fileName}-data-${i + 1}.ts`;
@@ -907,12 +991,13 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         // Данные
         if (this.config.createSeparateDataFiles) {
             if (hasBody) {
-                testCode += `    const requestData = requestData${testNumber};
+                // ИСПРАВЛЕНИЕ v14.5: Используем spread чтобы создать копию объекта (не const)
+                testCode += `    let requestData = { ...requestData${testNumber} };
 `;
             }
             // ИСПРАВЛЕНИЕ 9: Только переменная, не объект целиком
             testCode += `    const normalizedExpected = normalizedExpectedResponse${testNumber};
-    
+
 `;
         }
         else {
@@ -933,6 +1018,49 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     
 `;
         }
+        // НОВОЕ v14.2: Генерация уникальных значений для полей (избегаем 400 "Уже существует")
+        // НОВОЕ v14.5: Используем helper функцию вместо inline кода
+        const useUniqueFields = hasBody && this.config.enableUniqueFieldGeneration && this.config.uniqueFields.length > 0;
+        const useSeparateDataFiles = this.config.createSeparateDataFiles;
+        if (useUniqueFields) {
+            if (useSeparateDataFiles) {
+                // Используем helper функцию из test-helpers.ts
+                // ИСПРАВЛЕНИЕ v14.5: prepareUniqueFields возвращает новый объект, просто переприсваиваем
+                testCode += `    // Подготовка уникальных значений для избежания 400 "Уже существует"
+    const { data: preparedData, modifiedFields: modifiedUniqueFields } = prepareUniqueFields(requestData);
+    requestData = preparedData;
+
+`;
+            }
+            else {
+                // Inline код когда нет отдельных файлов данных
+                const uniqueFieldsList = this.config.uniqueFields;
+                const upperCaseFields = this.config.uniqueFieldsUpperCase;
+                testCode += `    // Генерация уникальных значений для избежания ошибок 400 "Уже существует"
+    const uniqueSuffix = \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
+    const modifiedUniqueFields: Record<string, string> = {};
+`;
+                for (const field of uniqueFieldsList) {
+                    const isUpperCase = upperCaseFields.includes(field);
+                    if (isUpperCase) {
+                        testCode += `    if (requestData.${field} && typeof requestData.${field} === 'string') {
+      requestData.${field} = (requestData.${field} + uniqueSuffix).toUpperCase();
+      modifiedUniqueFields['${field}'] = requestData.${field};
+    }
+`;
+                    }
+                    else {
+                        testCode += `    if (requestData.${field} && typeof requestData.${field} === 'string') {
+      requestData.${field} = requestData.${field} + uniqueSuffix;
+      modifiedUniqueFields['${field}'] = requestData.${field};
+    }
+`;
+                    }
+                }
+                testCode += `
+`;
+            }
+        }
         // ИСПРАВЛЕНИЕ 4: Запрос через catch с детальным выводом
         testCode += `    let response;
 
@@ -946,60 +1074,33 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
             testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
 `;
         }
-        // НОВОЕ v14.0: Детальный вывод ошибки через apiTestHelper
+        // НОВОЕ v14.1: Используем handleApiError для обработки ошибок (email логика внутри)
         const useApiTestHelper = this.config.apiTestHelperPath ? true : false;
         const use5xxEmailNotification = this.config.send5xxEmailNotification && this.config.emailHelperPath;
         const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
-        testCode += `    } catch (error: any) {
-      console.error('❌ Ошибка при вызове endpoint:');
-      console.error('Endpoint template:', endpoint);
-      console.error('Actual endpoint:', actualEndpoint);
-      console.error('Method:', httpMethod);
-`;
-        if (hasBody) {
-            testCode += `      console.error('Request:', JSON.stringify(requestData, null, 2));
-`;
-        }
-        // НОВОЕ v14.1: Email уведомление при 5xx ошибках (шаблон вынесен в утилиту)
-        if (use5xxEmailNotification) {
-            testCode += `
-      // Отправка email уведомления при 5xx ошибках
-      const errorStatus = error.response?.status;
-      if (errorStatus >= 500 && errorStatus <= 503) {
-        const errorData = {
-          errorCode: errorStatus,
-          errorMessage: error.response?.statusText || error.message,
-          endpoint: actualEndpoint,
-          method: httpMethod,
-          fullUrl: ${standUrlVar} + actualEndpoint,
-          testFilePath: testInfo.file,
-          testTitle: testInfo.title,${hasBody ? `
-          requestBody: requestData,` : ''}
-          responseData: error.response?.data,
-          axiosConfig: ${axiosConfig}
-        };
-        try {
-          const emailHtml = generateErrorEmailHtml(errorData);
-          await ${emailMethodName}(emailHtml);
-          console.log('📧 Email уведомление о 5xx ошибке отправлено');
-        } catch (emailError) {
-          console.error('❌ Не удалось отправить email:', emailError);
-        }
-      }
-`;
-        }
-        // НОВОЕ v14.0: Используем getMessageFromError для детализации
         if (useApiTestHelper) {
-            testCode += `
-      // Детальный вывод через apiTestHelper (можно скопировать curl для повторения в Postman)
-      const errorMessage = getMessageFromError(error);
-      console.error(errorMessage);
-      throw error;
+            // Используем централизованный handleApiError
+            testCode += `    } catch (error: any) {
+      await handleApiError({
+        error,
+        testInfo,
+        endpoint: actualEndpoint,
+        method: httpMethod,
+        standUrl: ${standUrlVar},${hasBody ? `
+        requestBody: requestData,` : ''}
+        axiosConfig: ${axiosConfig},${use5xxEmailNotification ? `
+        sendEmailFn: ${emailMethodName}` : ''}
+      });
     }
 `;
         }
         else {
-            testCode += `      console.error('Response status:', error.response?.status);
+            // Fallback без apiTestHelper
+            testCode += `    } catch (error: any) {
+      console.error('❌ Ошибка при вызове endpoint:');
+      console.error('Endpoint:', actualEndpoint);
+      console.error('Method:', httpMethod);
+      console.error('Response status:', error.response?.status);
       console.error('Response data:', JSON.stringify(error.response?.data, null, 2));
       console.error('Error message:', error.message);
       throw error;
@@ -1035,41 +1136,112 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         // ИСПРАВЛЕНИЕ 5: Используем deepCompareObjects вместо toMatchObject
         // ИСПРАВЛЕНИЕ 13: Улучшенный вывод различий с цветами (блочный формат)
         // НОВОЕ v14.1: При несовпадении выводим endpoint, метод и CURL для повторения
+        // НОВОЕ v14.1: Пропускаем сравнение если ожидаемый response пустой (null, undefined, "")
+        // НОВОЕ v14.2: Отдельная проверка уникальных полей + исключение их из основного сравнения
         testCode += `
-    // Глубокое сравнение (учитывает порядок в массивах)
-    const comparison = compareDbWithResponse(normalizedExpected, response.data);
+    // Проверка на пустой ожидаемый response - пропускаем сравнение данных
+    const isEmptyExpected = normalizedExpected === null ||
+                            normalizedExpected === undefined ||
+                            normalizedExpected === '' ||
+                            (typeof normalizedExpected === 'object' && Object.keys(normalizedExpected).length === 0);
 
-    if (!comparison.isEqual) {
-      console.log(formatDifferencesAsBlocks(comparison.differences));
-
-      // Дополнительная информация для отладки
-      console.log('\\n📍 Информация о запросе:');
-      console.log('Endpoint:', actualEndpoint);
-      console.log('Method:', httpMethod);
-      console.log('Full URL:', ${standUrlVar} + actualEndpoint);
-
-      // CURL команда для копирования (без рамки для удобства)
-      console.log('\\n📋 CURL для повторения запроса:');
+    if (isEmptyExpected) {
+      // Для пустых response проверяем только что запрос успешен
+      console.log('ℹ️ Ожидаемый response пустой - проверяем только статус код');
+    } else {
 `;
-        // Генерируем CURL команду
-        if (hasBody) {
-            testCode += `      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
-  -H 'Content-Type: application/json' \\\\
-  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' \\\\
-  -d '\${JSON.stringify(requestData)}'\`;
-      console.log(curlCmd);
+        // НОВОЕ v14.2: Добавляем проверку уникальных полей для POST/PUT/PATCH
+        // НОВОЕ v14.5: Используем helper функции когда есть отдельные файлы данных
+        if (useUniqueFields) {
+            if (useSeparateDataFiles) {
+                // Используем helper функции из test-helpers.ts
+                testCode += `      // Проверка уникальных полей (response должен вернуть то что отправили)
+      const { allMatch, mismatches } = verifyUniqueFields(response.data, modifiedUniqueFields);
+      if (!allMatch) {
+        console.error('❌ Несовпадение уникальных полей:', mismatches);
+      }
+      await expect(allMatch, 'Уникальные поля должны совпадать').toBe(true);
+
+      // Сравнение остальных полей (без уникальных)
+      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, modifiedUniqueFields);
 `;
+            }
+            else {
+                // Inline код когда нет отдельных файлов данных
+                testCode += `      // Проверка уникальных полей (response должен вернуть то что отправили)
+      const uniqueFieldErrors: string[] = [];
+      for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
+        const receivedValue = response.data?.[fieldName];
+        if (receivedValue !== sentValue) {
+          uniqueFieldErrors.push(\`Поле '\${fieldName}': отправлено '\${sentValue}', получено '\${receivedValue}'\`);
+        }
+      }
+      if (uniqueFieldErrors.length > 0) {
+        console.error('❌ Несовпадение уникальных полей:', uniqueFieldErrors);
+      }
+      await expect(uniqueFieldErrors.length, 'Уникальные поля должны совпадать').toBe(0);
+
+      // Сравнение остальных полей (без уникальных)
+      const uniqueFieldNames = Object.keys(modifiedUniqueFields);
+      const removeFields = (obj: any, fields: string[]): any => {
+        if (!obj || typeof obj !== 'object') return obj;
+        const result = { ...obj };
+        fields.forEach(f => delete result[f]);
+        return result;
+      };
+      const comparison = compareDbWithResponse(removeFields(normalizedExpected, uniqueFieldNames), removeFields(response.data, uniqueFieldNames));
+`;
+            }
         }
         else {
-            testCode += `      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
-  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
-      console.log(curlCmd);
+            // ИСПРАВЛЕНИЕ v14.5: Когда нет уникальных полей - обычное сравнение
+            if (useSeparateDataFiles) {
+                testCode += `      // Глубокое сравнение всех полей
+      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, {});
 `;
+            }
+            else {
+                testCode += `      // Глубокое сравнение всех полей
+      const comparison = compareDbWithResponse(normalizedExpected, response.data);
+`;
+            }
         }
-        testCode += `    }
+        // НОВОЕ v14.5: Используем helper для CURL если есть отдельные файлы данных
+        if (useSeparateDataFiles) {
+            testCode += `
+      if (!comparison.isEqual) {
+        console.log(formatDifferencesAsBlocks(comparison.differences));
+        console.log('\\n📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+        console.log('📋 CURL:', buildCurlCommand(httpMethod, ${standUrlVar} + actualEndpoint, ${hasBody ? 'requestData' : 'undefined'}, ${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization));
+      }
 
-    await expect(comparison.isEqual).toBe(true);
+      await expect(comparison.isEqual).toBe(true);
+    }
   });`;
+        }
+        else {
+            // Inline CURL генерация когда нет helper функций
+            testCode += `
+      if (!comparison.isEqual) {
+        console.log(formatDifferencesAsBlocks(comparison.differences));
+        console.log('\\n📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+`;
+            if (hasBody) {
+                testCode += `        const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`;
+        console.log('📋 CURL:', curlCmd);
+`;
+            }
+            else {
+                testCode += `        const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+        console.log('📋 CURL:', curlCmd);
+`;
+            }
+            testCode += `      }
+
+      await expect(comparison.isEqual).toBe(true);
+    }
+  });`;
+        }
         return testCode;
     }
     getJsType(tsType) {
@@ -1120,6 +1292,727 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         WHERE id = ${id}
       `;
         }
+    }
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // НОВОЕ v14.3: ГЕНЕРАЦИЯ ТЕСТОВ НА ВАЛИДАЦИЮ (422 ОШИБКИ)
+    // ═══════════════════════════════════════════════════════════════════════════════
+    /**
+     * Генерирует тесты для 422 ошибок валидации
+     * Тесты проверяют: статус 422 + ожидаемое сообщение об ошибке
+     */
+    async generateValidation422Tests(validation422Errors) {
+        if (!this.config.validationTests.enabled || validation422Errors.length === 0) {
+            return;
+        }
+        console.log(`\n📋 Генерация тестов на валидацию (422)...`);
+        console.log(`   Найдено ${validation422Errors.length} ошибок с детализацией`);
+        // Определяем папку для тестов валидации
+        const validationOutputDir = path.resolve(this.config.outputDir, this.config.validationTests.outputDir || '../validation-tests');
+        if (!fs.existsSync(validationOutputDir)) {
+            fs.mkdirSync(validationOutputDir, { recursive: true });
+        }
+        // Группируем по endpoint + method
+        const grouped = this.groupValidation422Errors(validation422Errors);
+        let totalTests = 0;
+        let newTests = 0;
+        for (const [key, errors] of Object.entries(grouped)) {
+            const { total, added } = await this.generateValidation422TestsForEndpoint(key, errors, validationOutputDir);
+            totalTests += total;
+            newTests += added;
+        }
+        console.log(`\n✅ Генерация тестов валидации завершена!`);
+        console.log(`   Всего тестов: ${totalTests}`);
+        console.log(`   Новых тестов: ${newTests}`);
+    }
+    /**
+     * Группирует 422 ошибки по endpoint + method
+     */
+    groupValidation422Errors(errors) {
+        const grouped = {};
+        const maxTests = this.config.validationTests.maxTestsPerEndpoint || 3;
+        for (const error of errors) {
+            // Нормализуем endpoint (заменяем числа на {id})
+            const normalizedEndpoint = error.endpoint.replace(/\/\d+/g, '/{id}');
+            const key = `${error.method}:${normalizedEndpoint}`;
+            if (!grouped[key]) {
+                grouped[key] = [];
+            }
+            if (grouped[key].length < maxTests) {
+                grouped[key].push(error);
+            }
+        }
+        return grouped;
+    }
+    /**
+     * Генерирует тесты валидации для одного endpoint
+     */
+    async generateValidation422TestsForEndpoint(key, errors, outputDir) {
+        const [method, endpoint] = key.split(':');
+        // Определяем категорию (для группировки по папкам)
+        let category = '';
+        if (this.config.validationTests.groupByCategory) {
+            const parts = endpoint.split('/').filter(Boolean);
+            // Берем первый значимый сегмент после api/v1/
+            const startIndex = parts.findIndex(p => p.match(/^v\d+$/));
+            if (startIndex >= 0 && parts[startIndex + 1]) {
+                category = parts[startIndex + 1];
+            }
+            else if (parts.length > 0) {
+                category = parts[0];
+            }
+        }
+        // Формируем путь к файлу
+        const fileName = this.endpointToFileName(endpoint, method) + '-validation';
+        const categoryDir = category ? path.join(outputDir, category) : outputDir;
+        if (!fs.existsSync(categoryDir)) {
+            fs.mkdirSync(categoryDir, { recursive: true });
+        }
+        const testFilePath = path.join(categoryDir, `${fileName}.spec.ts`);
+        const testDataDir = path.join(categoryDir, 'test-data');
+        // Проверяем существует ли уже файл
+        if (fs.existsSync(testFilePath) && !this.config.force) {
+            console.log(`  ⏭️  Пропущен (уже существует): ${fileName}`);
+            return { total: errors.length, added: 0 };
+        }
+        // Генерируем тестовый файл
+        const testCode = await this.generateValidation422TestFile(endpoint, method, errors, testDataDir, testFilePath);
+        fs.writeFileSync(testFilePath, testCode, 'utf-8');
+        console.log(`  ✓ Создан: ${fileName} (${errors.length} тестов)`);
+        return { total: errors.length, added: errors.length };
+    }
+    /**
+     * Генерирует код файла с тестами валидации
+     */
+    async generateValidation422TestFile(endpoint, method, errors, testDataDir, testFilePath) {
+        const standUrlVar = `process.env.${this.config.standUrlEnvVar}`;
+        const axiosConfig = this.config.axiosConfigName;
+        const testTag = this.config.validationTests.testTag || '@apiValidation';
+        const createDataFiles = this.config.validationTests.createSeparateDataFiles;
+        // Импорты
+        let code = `/**
+ * Тесты валидации API (422 ошибки)
+ * Автоматически сгенерировано: ${new Date().toISOString()}
+ * Endpoint: ${method} ${endpoint}
+ *
+ * Эти тесты проверяют корректность ответов при невалидных данных:
+ * - Статус 422 Unprocessable Entity
+ * - Детальное сообщение об ошибке
+ */
+
+import { test, expect } from '${this.config.testImportPath}';
+import axios from 'axios';
+import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
+`;
+        // Импорт apiTestHelper если настроен
+        if (this.config.apiTestHelperPath) {
+            code += `import { handleApiError, getMessageFromError } from '${this.config.apiTestHelperPath}';\n`;
+        }
+        // Импорт email helper если настроен
+        if (this.config.send5xxEmailNotification && this.config.emailHelperPath) {
+            code += `import { ${this.config.emailHelperMethodName || 'sendErrorMailbyApi'} } from '${this.config.emailHelperPath}';\n`;
+        }
+        // Тестовые данные
+        if (createDataFiles) {
+            // Создаем папку test-data
+            if (!fs.existsSync(testDataDir)) {
+                fs.mkdirSync(testDataDir, { recursive: true });
+            }
+            // Генерируем файл с тестовыми данными
+            const dataFileName = this.endpointToFileName(endpoint, method) + '-validation-data';
+            const dataFilePath = path.join(testDataDir, `${dataFileName}.ts`);
+            let dataCode = `/**
+ * Тестовые данные для тестов валидации
+ * Endpoint: ${method} ${endpoint}
+ */
+
+`;
+            for (let i = 0; i < errors.length; i++) {
+                const error = errors[i];
+                dataCode += `export const requestData${i + 1} = ${JSON.stringify(error.requestBody, null, 2)};\n\n`;
+                dataCode += `export const expectedError${i + 1} = ${JSON.stringify({
+                    status: 422,
+                    detailMessage: error.detailMessage,
+                    responseData: error.responseData
+                }, null, 2)};\n\n`;
+            }
+            fs.writeFileSync(dataFilePath, dataCode, 'utf-8');
+            // Импорт тестовых данных
+            const relativeDataPath = path.relative(path.dirname(testFilePath), dataFilePath).replace(/\.ts$/, '');
+            code += `import {\n`;
+            for (let i = 0; i < errors.length; i++) {
+                code += `  requestData${i + 1},\n`;
+                code += `  expectedError${i + 1},\n`;
+            }
+            code += `} from './${relativeDataPath.startsWith('.') ? relativeDataPath : './' + relativeDataPath}';\n`;
+        }
+        code += `
+const httpMethod = '${method}';
+
+test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
+`;
+        // Генерируем тесты
+        for (let i = 0; i < errors.length; i++) {
+            const error = errors[i];
+            code += await this.generateSingle422Test(error, i + 1, standUrlVar, axiosConfig, createDataFiles ?? true);
+            code += '\n';
+        }
+        code += `});
+`;
+        return code;
+    }
+    /**
+     * Генерирует код одного теста на 422 ошибку
+     */
+    async generateSingle422Test(error, testNumber, standUrlVar, axiosConfig, useDataFiles) {
+        const hasBody = ['POST', 'PUT', 'PATCH'].includes(error.method);
+        const shortMessage = error.detailMessage.length > 50
+            ? error.detailMessage.substring(0, 47) + '...'
+            : error.detailMessage;
+        let testCode = `  test(\`Validation #${testNumber}: ${shortMessage.replace(/`/g, "'")} (422) @api ${this.config.validationTests.testTag || '@apiValidation'}\`, async ({ page }, testInfo) => {
+    // Request ID: ${error.requestId}
+    const actualEndpoint = '${error.endpoint}';
+`;
+        // Данные запроса
+        if (useDataFiles) {
+            if (hasBody) {
+                testCode += `    const requestData = { ...requestData${testNumber} }; // Копия для модификации
+`;
+            }
+            testCode += `    const expectedErrorData = expectedError${testNumber};
+`;
+        }
+        else {
+            if (hasBody) {
+                testCode += `    const requestData = ${JSON.stringify(error.requestBody, null, 4).replace(/^/gm, '    ')};
+`;
+            }
+            testCode += `    const expectedErrorData = {
+      status: 422,
+      detailMessage: ${JSON.stringify(error.detailMessage)},
+    };
+`;
+        }
+        // Отправка запроса
+        testCode += `
+    let response;
+    let errorCaught = false;
+
+    try {
+`;
+        if (hasBody) {
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
+`;
+        }
+        else {
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
+`;
+        }
+        testCode += `    } catch (error: any) {
+      errorCaught = true;
+      response = error.response;
+
+      // Если это НЕ 422 - пробрасываем ошибку
+      if (!response || response.status !== 422) {
+`;
+        // Обработка неожиданных ошибок
+        const use5xxEmail = this.config.send5xxEmailNotification && this.config.emailHelperPath;
+        const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
+        if (this.config.apiTestHelperPath) {
+            testCode += `        await handleApiError({
+          error,
+          testInfo,
+          endpoint: actualEndpoint,
+          method: httpMethod,
+          standUrl: ${standUrlVar},${hasBody ? `
+          requestBody: requestData,` : ''}
+          axiosConfig: ${axiosConfig},${use5xxEmail ? `
+          sendEmailFn: ${emailMethodName}` : ''}
+        });
+`;
+        }
+        else {
+            testCode += `        console.error('❌ Ожидалась ошибка 422, но получена:', response?.status || error.message);
+        throw error;
+`;
+        }
+        testCode += `      }
+    }
+
+    // Проверяем что запрос вернул 422
+    await expect(errorCaught, 'Ожидалась ошибка 422, но запрос успешен').toBe(true);
+    await expect(response).toBeDefined();
+    await expect(response.status).toBe(422);
+
+    // Проверяем детальное сообщение об ошибке
+    const responseDetail = response.data?.detail || response.data?.message || response.data?.error || JSON.stringify(response.data);
+
+    if (responseDetail !== expectedErrorData.detailMessage) {
+      console.log('\\n📋 Различие в сообщении об ошибке:');
+      console.log('Ожидалось:', expectedErrorData.detailMessage);
+      console.log('Получено:', responseDetail);
+      console.log('\\n📍 Информация о запросе:');
+      console.log('Endpoint:', actualEndpoint);
+      console.log('Method:', httpMethod);
+      console.log('Full URL:', ${standUrlVar} + actualEndpoint);
+`;
+        // CURL для отладки
+        if (hasBody) {
+            testCode += `
+      // CURL команда для повторения
+      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Content-Type: application/json' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' \\\\
+  -d '\${JSON.stringify(requestData)}'\`;
+      console.log('\\n📋 CURL для повторения:');
+      console.log(curlCmd);
+`;
+        }
+        else {
+            testCode += `
+      // CURL команда для повторения
+      const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' \\\\
+  -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.log('\\n📋 CURL для повторения:');
+      console.log(curlCmd);
+`;
+        }
+        testCode += `    }
+
+    // Мягкая проверка сообщения - выводим предупреждение, но не падаем
+    // (сообщения могут меняться, главное - что вернулся 422)
+    if (responseDetail !== expectedErrorData.detailMessage) {
+      console.warn('⚠️  Сообщение об ошибке изменилось (тест НЕ падает, но требует внимания)');
+    }
+
+    // Основная проверка - статус 422
+    await expect(response.status, 'Ожидается статус 422 Unprocessable Entity').toBe(422);
+  });`;
+        return testCode;
+    }
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // НОВОЕ v14.4: ГЕНЕРАЦИЯ ТЕСТОВ НА 400 ОШИБКИ (ДУБЛИКАТЫ)
+    // ═══════════════════════════════════════════════════════════════════════════════
+    /**
+     * Генерирует парные тесты для 400 ошибок "Уже существует":
+     * - Негативный тест: оригинальные данные → 400 + проверка сообщения
+     * - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+     */
+    async generate400DuplicateTests(duplicate400Errors) {
+        if (!this.config.duplicateTests.enabled || duplicate400Errors.length === 0) {
+            return;
+        }
+        console.log(`\n📋 Генерация парных тестов на дубликаты (400)...`);
+        console.log(`   Найдено ${duplicate400Errors.length} ошибок с детализацией`);
+        // Определяем папку для тестов (абсолютный путь из конфига)
+        const duplicateOutputDir = path.resolve(this.config.duplicateTests.outputDir || './tests/api/negative-400');
+        if (!fs.existsSync(duplicateOutputDir)) {
+            fs.mkdirSync(duplicateOutputDir, { recursive: true });
+        }
+        // Группируем по endpoint + method
+        const grouped = this.groupDuplicate400Errors(duplicate400Errors);
+        let totalTests = 0;
+        let newTests = 0;
+        for (const [key, errors] of Object.entries(grouped)) {
+            const { total, added } = await this.generate400TestsForEndpoint(key, errors, duplicateOutputDir);
+            totalTests += total;
+            newTests += added;
+        }
+        console.log(`\n✅ Генерация тестов на дубликаты завершена!`);
+        console.log(`   Всего тестов: ${totalTests}`);
+        console.log(`   Новых тестов: ${newTests}`);
+    }
+    /**
+     * Группирует 400 ошибки по endpoint + method
+     */
+    groupDuplicate400Errors(errors) {
+        const grouped = {};
+        const maxTests = this.config.duplicateTests.maxTestsPerEndpoint || 2;
+        for (const error of errors) {
+            // Нормализуем endpoint (заменяем числа на {id})
+            const normalizedEndpoint = error.endpoint.replace(/\/\d+/g, '/{id}');
+            const key = `${error.method}:${normalizedEndpoint}`;
+            if (!grouped[key]) {
+                grouped[key] = [];
+            }
+            if (grouped[key].length < maxTests) {
+                grouped[key].push(error);
+            }
+        }
+        return grouped;
+    }
+    /**
+     * Генерирует парные тесты для одного endpoint
+     */
+    async generate400TestsForEndpoint(key, errors, outputDir) {
+        const [method, endpoint] = key.split(':');
+        // Определяем категорию (для группировки по папкам)
+        let category = '';
+        if (this.config.duplicateTests.groupByCategory) {
+            const parts = endpoint.split('/').filter(Boolean);
+            const startIndex = parts.findIndex(p => p.match(/^v\d+$/));
+            if (startIndex >= 0 && parts[startIndex + 1]) {
+                category = parts[startIndex + 1];
+            }
+            else if (parts.length > 0) {
+                category = parts[0];
+            }
+        }
+        // Формируем путь к файлу
+        const fileName = this.endpointToFileName(endpoint, method) + '-duplicate-400';
+        const categoryDir = category ? path.join(outputDir, category) : outputDir;
+        if (!fs.existsSync(categoryDir)) {
+            fs.mkdirSync(categoryDir, { recursive: true });
+        }
+        const testFilePath = path.join(categoryDir, `${fileName}.spec.ts`);
+        const testDataDir = path.join(categoryDir, 'test-data');
+        // Проверяем существует ли уже файл
+        if (fs.existsSync(testFilePath) && !this.config.force) {
+            console.log(`  ⏭️  Пропущен (уже существует): ${fileName}`);
+            return { total: errors.length * 2, added: 0 }; // *2 потому что парные тесты
+        }
+        // Генерируем тестовый файл
+        const testCode = await this.generate400TestFile(endpoint, method, errors, testDataDir, testFilePath);
+        fs.writeFileSync(testFilePath, testCode, 'utf-8');
+        console.log(`  ✓ Создан: ${fileName} (${errors.length * 2} тестов: ${errors.length} негативных + ${errors.length} позитивных)`);
+        return { total: errors.length * 2, added: errors.length * 2 };
+    }
+    /**
+     * Генерирует код файла с парными тестами на 400
+     */
+    async generate400TestFile(endpoint, method, errors, testDataDir, testFilePath) {
+        const standUrlVar = `process.env.${this.config.standUrlEnvVar}`;
+        const axiosConfig = this.config.axiosConfigName;
+        const testTag = this.config.duplicateTests.testTag || '@negative400Validation';
+        const createDataFiles = this.config.duplicateTests.createSeparateDataFiles;
+        // Импорты
+        let code = `/**
+ * Парные тесты на дубликаты (400 ошибки)
+ * Автоматически сгенерировано: ${new Date().toISOString()}
+ * Endpoint: ${method} ${endpoint}
+ *
+ * Эти тесты проверяют корректность обработки дубликатов:
+ * - Негативный: оригинальные данные → 400 + сообщение об ошибке
+ * - Позитивный: данные с уникальными полями → 2xx + проверка response
+ */
+
+import { test, expect } from '${this.config.testImportPath}';
+import axios from 'axios';
+import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
+`;
+        // Импорт apiTestHelper если настроен
+        if (this.config.apiTestHelperPath) {
+            code += `import { handleApiError, getMessageFromError } from '${this.config.apiTestHelperPath}';\n`;
+        }
+        // Импорт compareDbWithResponse для позитивных тестов
+        code += `import { compareDbWithResponse } from '${this.config.packageName}';\n`;
+        // Импорт email helper если настроен
+        if (this.config.send5xxEmailNotification && this.config.emailHelperPath) {
+            code += `import { ${this.config.emailHelperMethodName || 'sendErrorMailbyApi'} } from '${this.config.emailHelperPath}';\n`;
+        }
+        // Тестовые данные
+        if (createDataFiles) {
+            // Создаем папку test-data
+            if (!fs.existsSync(testDataDir)) {
+                fs.mkdirSync(testDataDir, { recursive: true });
+            }
+            // Генерируем файл с тестовыми данными
+            const dataFileName = this.endpointToFileName(endpoint, method) + '-duplicate-400-data';
+            const dataFilePath = path.join(testDataDir, `${dataFileName}.ts`);
+            let dataCode = `/**
+ * Тестовые данные для парных тестов на дубликаты (400)
+ * Endpoint: ${method} ${endpoint}
+ */
+
+`;
+            for (let i = 0; i < errors.length; i++) {
+                const error = errors[i];
+                dataCode += `// Тест #${i + 1}\n`;
+                dataCode += `export const requestData${i + 1} = ${JSON.stringify(error.requestBody, null, 2)};\n\n`;
+                dataCode += `export const expectedError${i + 1} = ${JSON.stringify({
+                    status: 400,
+                    detailMessage: error.detailMessage,
+                    responseData: error.responseData
+                }, null, 2)};\n\n`;
+                dataCode += `export const expectedSuccess${i + 1} = ${JSON.stringify({
+                    status: error.expectedStatus,
+                    responseBody: error.expectedResponseBody
+                }, null, 2)};\n\n`;
+            }
+            fs.writeFileSync(dataFilePath, dataCode, 'utf-8');
+            // Импорт тестовых данных
+            const relativeDataPath = path.relative(path.dirname(testFilePath), dataFilePath).replace(/\.ts$/, '');
+            code += `import {\n`;
+            for (let i = 0; i < errors.length; i++) {
+                code += `  requestData${i + 1},\n`;
+                code += `  expectedError${i + 1},\n`;
+                code += `  expectedSuccess${i + 1},\n`;
+            }
+            code += `} from './${relativeDataPath.startsWith('.') ? relativeDataPath : './' + relativeDataPath}';\n`;
+        }
+        code += `
+const httpMethod = '${method}';
+
+test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
+`;
+        // Генерируем парные тесты
+        for (let i = 0; i < errors.length; i++) {
+            const error = errors[i];
+            // Негативный тест (400)
+            code += await this.generateSingle400NegativeTest(error, i + 1, standUrlVar, axiosConfig, createDataFiles ?? true);
+            code += '\n';
+            // Позитивный тест (с uniqueFields)
+            code += await this.generateSingle400PositiveTest(error, i + 1, standUrlVar, axiosConfig, createDataFiles ?? true);
+            code += '\n';
+        }
+        code += `});
+`;
+        return code;
+    }
+    /**
+     * Генерирует негативный тест: оригинальные данные → 400
+     */
+    async generateSingle400NegativeTest(error, testNumber, standUrlVar, axiosConfig, useDataFiles) {
+        const hasBody = ['POST', 'PUT', 'PATCH'].includes(error.method);
+        const shortMessage = error.detailMessage.length > 40
+            ? error.detailMessage.substring(0, 37) + '...'
+            : error.detailMessage;
+        let testCode = `  test(\`Negative #${testNumber}: ${shortMessage.replace(/`/g, "'")} (400) @api ${this.config.duplicateTests.testTag || '@negative400Validation'}\`, async ({ page }, testInfo) => {
+    // Request ID: ${error.requestId}
+    // Негативный тест: оригинальные данные должны вернуть 400 "Уже существует"
+    const actualEndpoint = '${error.endpoint}';
+`;
+        // Данные запроса
+        if (useDataFiles) {
+            if (hasBody) {
+                testCode += `    const requestData = { ...requestData${testNumber} }; // Оригинальные данные (вызовут 400)
+`;
+            }
+            testCode += `    const expectedErrorData = expectedError${testNumber};
+`;
+        }
+        else {
+            if (hasBody) {
+                testCode += `    const requestData = ${JSON.stringify(error.requestBody, null, 4).replace(/^/gm, '    ')};
+`;
+            }
+            testCode += `    const expectedErrorData = {
+      status: 400,
+      detailMessage: ${JSON.stringify(error.detailMessage)},
+    };
+`;
+        }
+        // Отправка запроса
+        testCode += `
+    let response;
+    let errorCaught = false;
+
+    try {
+`;
+        if (hasBody) {
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
+`;
+        }
+        else {
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
+`;
+        }
+        testCode += `    } catch (error: any) {
+      errorCaught = true;
+      response = error.response;
+
+      // Если это НЕ 400 - пробрасываем ошибку
+      if (!response || response.status !== 400) {
+`;
+        // Обработка неожиданных ошибок
+        const use5xxEmail = this.config.send5xxEmailNotification && this.config.emailHelperPath;
+        const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
+        if (this.config.apiTestHelperPath) {
+            testCode += `        await handleApiError({
+          error,
+          testInfo,
+          endpoint: actualEndpoint,
+          method: httpMethod,
+          standUrl: ${standUrlVar},${hasBody ? `
+          requestBody: requestData,` : ''}
+          axiosConfig: ${axiosConfig},${use5xxEmail ? `
+          sendEmailFn: ${emailMethodName}` : ''}
+        });
+`;
+        }
+        else {
+            testCode += `        console.error('❌ Ожидалась ошибка 400, но получена:', response?.status || error.message);
+        throw error;
+`;
+        }
+        testCode += `      }
+    }
+
+    // Проверяем что запрос вернул 400
+    await expect(errorCaught, 'Ожидалась ошибка 400 (дубликат), но запрос успешен').toBe(true);
+    await expect(response).toBeDefined();
+    await expect(response.status).toBe(400);
+
+    // Проверяем детальное сообщение об ошибке (из реального response)
+    const responseDetail = response.data?.detail || response.data?.message || response.data?.error || JSON.stringify(response.data);
+
+    // Проверка ТОЧНОГО совпадения сообщения (взято из реального API)
+    await expect(responseDetail, 'Сообщение об ошибке должно совпадать').toBe(expectedErrorData.detailMessage);
+  });`;
+        return testCode;
+    }
+    /**
+     * Генерирует позитивный тест: данные с uniqueFields → 2xx
+     */
+    async generateSingle400PositiveTest(error, testNumber, standUrlVar, axiosConfig, useDataFiles) {
+        const hasBody = ['POST', 'PUT', 'PATCH'].includes(error.method);
+        const uniqueFields = this.config.uniqueFields || ['name', 'code', 'title'];
+        const upperCaseFields = this.config.uniqueFieldsUpperCase || ['code'];
+        let testCode = `  test(\`Positive #${testNumber}: С уникальными полями (${error.expectedStatus}) @api @apiHappyPath\`, async ({ page }, testInfo) => {
+    // Request ID: ${error.requestId}
+    // Позитивный тест: данные с уникальными полями должны вернуть ${error.expectedStatus}
+    const actualEndpoint = '${error.endpoint}';
+`;
+        // Данные запроса
+        if (useDataFiles) {
+            if (hasBody) {
+                testCode += `    const requestData = { ...requestData${testNumber} }; // Копия для модификации
+`;
+            }
+            testCode += `    const expectedSuccessData = expectedSuccess${testNumber};
+`;
+        }
+        else {
+            if (hasBody) {
+                testCode += `    const requestData = ${JSON.stringify(error.requestBody, null, 4).replace(/^/gm, '    ')};
+`;
+            }
+            testCode += `    const expectedSuccessData = {
+      status: ${error.expectedStatus},
+      responseBody: ${JSON.stringify(error.expectedResponseBody, null, 4).replace(/^/gm, '      ')},
+    };
+`;
+        }
+        // Генерация уникальных значений
+        if (hasBody) {
+            testCode += `
+    // Генерация уникальных значений для избежания 400 "Уже существует"
+    const uniqueSuffix = \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
+    const modifiedUniqueFields: Record<string, string> = {};
+
+`;
+            // Генерируем код для каждого уникального поля
+            for (const field of uniqueFields) {
+                const isUpperCase = upperCaseFields.includes(field);
+                if (isUpperCase) {
+                    testCode += `    if (requestData.${field} !== undefined && typeof requestData.${field} === 'string') {
+      requestData.${field} = (requestData.${field} + uniqueSuffix).toUpperCase();
+      modifiedUniqueFields['${field}'] = requestData.${field};
+    }
+`;
+                }
+                else {
+                    testCode += `    if (requestData.${field} !== undefined && typeof requestData.${field} === 'string') {
+      requestData.${field} = requestData.${field} + uniqueSuffix;
+      modifiedUniqueFields['${field}'] = requestData.${field};
+    }
+`;
+                }
+            }
+        }
+        // Отправка запроса
+        testCode += `
+    let response;
+
+    try {
+`;
+        if (hasBody) {
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
+`;
+        }
+        else {
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
+`;
+        }
+        const use5xxEmail = this.config.send5xxEmailNotification && this.config.emailHelperPath;
+        const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
+        testCode += `    } catch (error: any) {
+`;
+        if (this.config.apiTestHelperPath) {
+            testCode += `      await handleApiError({
+        error,
+        testInfo,
+        endpoint: actualEndpoint,
+        method: httpMethod,
+        standUrl: ${standUrlVar},${hasBody ? `
+        requestBody: requestData,` : ''}
+        axiosConfig: ${axiosConfig},${use5xxEmail ? `
+        sendEmailFn: ${emailMethodName}` : ''}
+      });
+`;
+        }
+        else {
+            testCode += `      console.error('❌ Запрос с уникальными полями не должен падать:', error.message);
+      throw error;
+`;
+        }
+        testCode += `    }
+
+    // Проверяем статус код
+    await expect(response.status).toBe(expectedSuccessData.status);
+
+`;
+        // Проверка уникальных полей
+        if (hasBody) {
+            testCode += `    // Проверяем что бэкенд вернул именно те уникальные значения что мы отправили
+    for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
+      const receivedValue = response.data[fieldName];
+      await expect(receivedValue, \`Поле '\${fieldName}' должно совпадать с отправленным\`).toBe(sentValue);
+    }
+
+    // Сравниваем остальные поля (без уникальных)
+    if (expectedSuccessData.responseBody !== null && expectedSuccessData.responseBody !== undefined) {
+      const uniqueFieldNames = Object.keys(modifiedUniqueFields);
+
+      // Функция удаления полей из объекта
+      const removeFields = (obj: any, fields: string[]): any => {
+        if (!obj || typeof obj !== 'object') return obj;
+        const copy = Array.isArray(obj) ? [...obj] : { ...obj };
+        for (const field of fields) {
+          if (field in copy) delete copy[field];
+        }
+        return copy;
+      };
+
+      const expectedWithoutUnique = removeFields(expectedSuccessData.responseBody, uniqueFieldNames);
+      const responseWithoutUnique = removeFields(response.data, uniqueFieldNames);
+
+      const comparison = compareDbWithResponse(expectedWithoutUnique, responseWithoutUnique);
+
+      if (!comparison.isEqual) {
+        console.log('\\n❌ Различия в response (без уникальных полей):');
+        console.log(comparison.formattedDiff);
+      }
+
+      await expect(comparison.isEqual, 'Response должен соответствовать ожидаемому (без уникальных полей)').toBe(true);
+    }
+`;
+        }
+        else {
+            testCode += `    // Сравниваем response с ожидаемым
+    if (expectedSuccessData.responseBody !== null && expectedSuccessData.responseBody !== undefined) {
+      const comparison = compareDbWithResponse(expectedSuccessData.responseBody, response.data);
+
+      if (!comparison.isEqual) {
+        console.log('\\n❌ Различия в response:');
+        console.log(comparison.formattedDiff);
+      }
+
+      await expect(comparison.isEqual, 'Response должен соответствовать ожидаемому').toBe(true);
+    }
+`;
+        }
+        testCode += `  });`;
+        return testCode;
     }
 }
 exports.HappyPathTestGenerator = HappyPathTestGenerator;

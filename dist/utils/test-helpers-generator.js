@@ -1,3 +1,4 @@
+"use strict";
 /**
  * Генератор helper функций для тестов
  * ВЕРСИЯ 14.5.1
@@ -9,18 +10,14 @@
  * - verifyUniqueFields - проверка уникальных полей в response
  * - formatDifferencesAsBlocks - форматирование различий (реэкспорт)
  */
-
-export interface TestHelpersConfig {
-  uniqueFields: string[];
-  uniqueFieldsUpperCase: string[];
-  packageName: string;
-}
-
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.generateTestHelpersCode = generateTestHelpersCode;
+exports.generateInlineHelpers = generateInlineHelpers;
 /**
  * Генерирует код файла с helper функциями
  */
-export function generateTestHelpersCode(config: TestHelpersConfig): string {
-  return `/**
+function generateTestHelpersCode(config) {
+    return `/**
  * Helper функции для тестов
  * Автоматически сгенерировано
  */
@@ -154,13 +151,12 @@ export function verifyUniqueFields(
 }
 `;
 }
-
 /**
  * Генерирует код с inline helper функциями для тестов
  * Используется когда createSeparateDataFiles = false
  */
-export function generateInlineHelpers(config: TestHelpersConfig): string {
-  return `
+function generateInlineHelpers(config) {
+    return `
 // === HELPER FUNCTIONS ===
 
 function generateUniqueSuffix(): string {
@@ -200,3 +196,4 @@ function buildCurlCommand(method: string, url: string, body?: any, authHeader?: 
 // === END HELPER FUNCTIONS ===
 `;
 }
+//# sourceMappingURL=test-helpers-generator.js.map

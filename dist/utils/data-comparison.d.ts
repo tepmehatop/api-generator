@@ -1,9 +1,42 @@
 /**
  * Утилиты для сравнения данных из БД с API response
+ * ВЕРСИЯ 14.1
  *
- * ИСПРАВЛЕНИЕ: Добавлена normalizeDbDataByDto для нормализации на основе типов из DTO
+ * ИСПРАВЛЕНИЯ:
+ * - normalizeDbDataByDto для нормализации на основе типов из DTO
+ * - НОВОЕ: Корректное сравнение массивов с игнорированием порядка элементов
+ * - НОВОЕ: Рекурсивная сортировка вложенных массивов
+ * - НОВОЕ: Сортировка по ключевым полям (id, code, uuid)
  */
 import { DTOInfo } from './dto-finder';
+/**
+ * Рекурсивно сортирует все массивы в объекте
+ *
+ * Обрабатывает:
+ * - Массивы примитивов: [3, 5, 1, 44] → [1, 3, 5, 44]
+ * - Массивы строк: ["ORDERED", "CREATED"] → ["CREATED", "ORDERED"]
+ * - Массивы объектов: сортировка по id/uuid/code/key/name/title
+ * - Вложенные массивы: рекурсивная обработка
+ *
+ * @param data - Данные для сортировки
+ * @returns Копия данных с отсортированными массивами
+ *
+ * @example
+ * // Массив чисел
+ * sortArraysRecursively({ tags: [3, 5, 1, 44] })
+ * // → { tags: [1, 3, 5, 44] }
+ *
+ * @example
+ * // Массив строк
+ * sortArraysRecursively({ states: ["ORDERED", "CREATED", "TESTED"] })
+ * // → { states: ["CREATED", "ORDERED", "TESTED"] }
+ *
+ * @example
+ * // Массив объектов
+ * sortArraysRecursively({ items: [{ id: 3 }, { id: 1 }] })
+ * // → { items: [{ id: 1 }, { id: 3 }] }
+ */
+export declare function sortArraysRecursively(data: any): any;
 /**
  * Нормализует данные из БД (убирает экранирования, парсит JSON)
  */
@@ -20,6 +53,15 @@ export declare function normalizeDbDataByDto(data: any, dtoInfo: DTOInfo): any;
 export declare function convertDataTypes(data: any): any;
 /**
  * Глубокое сравнение объектов с игнорированием порядка в массивах
+ *
+ * ВЕРСИЯ 14.1: Исправлено сравнение массивов объектов
+ * - Массивы сортируются рекурсивно ПЕРЕД сравнением
+ * - Сортировка по ключевым полям (id, uuid, code, key, name, title)
+ * - Если ключевого поля нет - создаётся хеш из всех полей
+ *
+ * @param actual - Фактические данные (с API)
+ * @param expected - Ожидаемые данные (тестовые данные)
+ * @returns Результат сравнения с массивом различий
  */
 export declare function deepCompareObjects(actual: any, expected: any): {
     isEqual: boolean;

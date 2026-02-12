@@ -1,10 +1,11 @@
 /**
  * Утилиты для дедупликации Happy Path тестов
- * ВЕРСИЯ 12.0
+ * ВЕРСИЯ 14.5
  *
  * Реализует:
  * - Идея 1: Группировка по "signature" (игнорируем технические поля)
  * - Идея 2: Обнаружение edge cases (пустые массивы, null, редкие значения)
+ * - НОВОЕ v14.5: Дедупликация по request_body (игнорируя порядок полей)
  */
 export interface DeduplicationConfig {
     enabled?: boolean;
@@ -28,6 +29,28 @@ export interface EdgeCaseInfo {
     path: string;
     value: any;
 }
+/**
+ * НОВОЕ v14.5: Нормализует объект для сравнения
+ * - Рекурсивно сортирует ключи объектов
+ * - Сортирует элементы массивов
+ * - Позволяет сравнивать request body независимо от порядка полей
+ *
+ * @example
+ * // Эти два объекта станут одинаковыми после нормализации:
+ * { "storeIds": [], "productsIds": [] }
+ * { "productsIds": [], "storeIds": [] }
+ */
+export declare function normalizeForComparison(data: any): any;
+/**
+ * НОВОЕ v14.5: Вычисляет signature запроса (endpoint + method + normalized body)
+ * Используется для дедупликации одинаковых запросов с разным порядком полей
+ */
+export declare function calculateRequestSignature(request: TestRequest): string;
+/**
+ * НОВОЕ v14.5: Удаляет дубликаты запросов по request body
+ * Запросы с одинаковым endpoint + method + body (независимо от порядка полей) считаются дубликатами
+ */
+export declare function deduplicateByRequestBody(requests: TestRequest[]): TestRequest[];
 /**
  * Вычисляет "signature" (отпечаток) ответа
  * Игнорирует технические поля (id, timestamps)
@@ -56,6 +79,8 @@ export declare function selectBestTests(requests: TestRequest[], config: Dedupli
 /**
  * Главная функция дедупликации
  * Принимает массив запросов, возвращает отфильтрованный массив
+ *
+ * НОВОЕ v14.5: Добавлена дедупликация по request_body (этап 0)
  */
 export declare function deduplicateTests(requests: TestRequest[], config: DeduplicationConfig): TestRequest[];
 //# sourceMappingURL=test-deduplication.d.ts.map

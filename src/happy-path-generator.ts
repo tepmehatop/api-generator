@@ -1,6 +1,6 @@
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.4 - ТЕСТЫ НА 400 ДУБЛИКАТЫ (НЕГАТИВ + ПОЗИТИВ)
+ * ВЕРСИЯ 14.5.1 - ИСПРАВЛЕНИЯ БАГОВ ГЕНЕРАЦИИ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -1245,13 +1245,23 @@ export class HappyPathTestGenerator {
         }
 
         // НОВОЕ v14.3: Генерируем тесты на валидацию (422 ошибки)
+        if (this.config.debug || validationResult.validation422Errors.length > 0 || validationResult.duplicate400Errors.length > 0) {
+          console.log(`\n📋 Собранные ошибки для генерации тестов:`);
+          console.log(`   422 ошибок: ${validationResult.validation422Errors.length} (генерация: ${this.config.validationTests.enabled ? 'ВКЛ' : 'ВЫКЛ'})`);
+          console.log(`   400 ошибок: ${validationResult.duplicate400Errors.length} (генерация: ${this.config.duplicateTests.enabled ? 'ВКЛ' : 'ВЫКЛ'})`);
+        }
+
         if (this.config.validationTests.enabled && validationResult.validation422Errors.length > 0) {
           await this.generateValidation422Tests(validationResult.validation422Errors);
+        } else if (this.config.validationTests.enabled && validationResult.validation422Errors.length === 0) {
+          console.log(`   ⚠️  422 тесты включены, но ошибок не найдено`);
         }
 
         // НОВОЕ v14.4: Генерируем парные тесты на дубликаты (400 ошибки)
         if (this.config.duplicateTests.enabled && validationResult.duplicate400Errors.length > 0) {
           await this.generate400DuplicateTests(validationResult.duplicate400Errors);
+        } else if (this.config.duplicateTests.enabled && validationResult.duplicate400Errors.length === 0) {
+          console.log(`   ⚠️  400 тесты включены, но ошибок не найдено`);
         }
       } catch (error: any) {
         console.error('❌ Ошибка при валидации данных:', error.message);
@@ -1566,8 +1576,8 @@ export class HappyPathTestGenerator {
     // ИСПРАВЛЕНИЕ 9: Импорты нормализованных данных
     if (this.config.createSeparateDataFiles) {
       const fileName = this.endpointToFileName(endpoint, method);
-      // НОВОЕ v14.5: Импорт helper функций
-      imports.push(`import { prepareUniqueFields, buildCurlCommand, compareWithoutUniqueFields, verifyUniqueFields } from './test-data/test-helpers';`);
+      // НОВОЕ v14.5: Импорт helper функций (включая formatDifferencesAsBlocks)
+      imports.push(`import { prepareUniqueFields, buildCurlCommand, compareWithoutUniqueFields, verifyUniqueFields, formatDifferencesAsBlocks } from './test-data/test-helpers';`);
       for (let i = 0; i < requests.length; i++) {
         imports.push(`import { requestData as requestData${i + 1}, normalizedExpectedResponse as normalizedExpectedResponse${i + 1} } from './test-data/${fileName}-data-${i + 1}';`);
       }
@@ -1710,12 +1720,13 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     // Данные
     if (this.config.createSeparateDataFiles) {
       if (hasBody) {
-        testCode += `    const requestData = requestData${testNumber};
+        // ИСПРАВЛЕНИЕ v14.5: Используем spread чтобы создать копию объекта (не const)
+        testCode += `    let requestData = { ...requestData${testNumber} };
 `;
       }
       // ИСПРАВЛЕНИЕ 9: Только переменная, не объект целиком
       testCode += `    const normalizedExpected = normalizedExpectedResponse${testNumber};
-    
+
 `;
     } else {
       if (hasBody) {
@@ -1745,9 +1756,10 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     if (useUniqueFields) {
       if (useSeparateDataFiles) {
         // Используем helper функцию из test-helpers.ts
+        // ИСПРАВЛЕНИЕ v14.5: prepareUniqueFields возвращает новый объект, просто переприсваиваем
         testCode += `    // Подготовка уникальных значений для избежания 400 "Уже существует"
     const { data: preparedData, modifiedFields: modifiedUniqueFields } = prepareUniqueFields(requestData);
-    Object.assign(requestData, preparedData);
+    requestData = preparedData;
 
 `;
       } else {
@@ -1915,6 +1927,17 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         return result;
       };
       const comparison = compareDbWithResponse(removeFields(normalizedExpected, uniqueFieldNames), removeFields(response.data, uniqueFieldNames));
+`;
+      }
+    } else {
+      // ИСПРАВЛЕНИЕ v14.5: Когда нет уникальных полей - обычное сравнение
+      if (useSeparateDataFiles) {
+        testCode += `      // Глубокое сравнение всех полей
+      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, {});
+`;
+      } else {
+        testCode += `      // Глубокое сравнение всех полей
+      const comparison = compareDbWithResponse(normalizedExpected, response.data);
 `;
       }
     }

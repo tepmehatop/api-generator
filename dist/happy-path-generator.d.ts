@@ -1,6 +1,6 @@
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 12.0 - ДЕДУПЛИКАЦИЯ И ВАЛИДАЦИЯ ДАННЫХ
+ * ВЕРСИЯ 14.5.1 - ИСПРАВЛЕНИЯ БАГОВ ГЕНЕРАЦИИ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -16,9 +16,25 @@
  * 11. Динамический импорт compareDbWithResponse из NPM пакета (packageName)
  * 12. Реальный endpoint с подставленными ID вместо {id}
  * 13. Улучшенный вывод различий с цветами (блочный формат)
- * 14. НОВОЕ: Дедупликация тестов (Идея 1 + 2)
- * 15. НОВОЕ: Валидация данных (Стратегия 1 - проверка актуальности)
+ * 14. Дедупликация тестов (Идея 1 + 2)
+ * 15. Валидация данных (Стратегия 1 - проверка актуальности)
+ * 16. v14.2: Уникальные поля для POST запросов (uniqueFields, uniqueFieldsUpperCase)
+ *     - Генерация уникальных суффиксов для избежания 400 "Уже существует"
+ *     - Отдельная проверка уникальных полей (response === request)
+ *     - Исключение уникальных полей из основного сравнения
+ *     - Поддержка CAPS полей (code → CODE_SUFFIX)
+ * 17. НОВОЕ v14.3: Тесты на валидацию (422 ошибки)
+ *     - Сбор 422 ответов с детальными сообщениями во время валидации
+ *     - Пропуск "Bad Request" без детализации (логирование в отдельный JSON)
+ *     - Генерация тестов в отдельную папку с проверкой статуса и сообщения
+ *     - Тестовые данные в папке test-data (как Happy Path)
+ * 18. НОВОЕ v14.4: Парные тесты на дубликаты (400 ошибки)
+ *     - Негативный тест: оригинальные данные → 400 + проверка ТОЧНОГО сообщения
+ *     - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+ *     - 3 независимые папки: happy-path, validation-tests (422), negative-400
+ *     - Сообщение берётся из реального response (не хардкод!)
  */
+import { Validation422Error, Duplicate400Error } from './utils/data-validation';
 export interface HappyPathTestConfig {
     /**
      * Папка для выгрузки сгенерированных тестов
@@ -341,6 +357,158 @@ export interface HappyPathTestConfig {
      * @default false
      */
     debug?: boolean;
+    /**
+     * НОВОЕ v14.2: Поля которые должны быть уникальными при POST/PUT/PATCH запросах
+     *
+     * ЗАЧЕМ ЭТО НУЖНО:
+     * При создании записей часто возникают ошибки 400 "Уже существует" из-за
+     * дублирования уникальных полей (code, name, title и т.д.)
+     *
+     * КАК РАБОТАЕТ:
+     * 1. К значениям указанных полей добавляется уникальный суффикс (timestamp + random)
+     * 2. Суффикс добавляется ТОЛЬКО если поле существует в requestBody и имеет строковое значение
+     * 3. Работает только для POST, PUT, PATCH запросов
+     *
+     * @example ['name', 'code', 'title', 'email']
+     * @default ['name', 'code', 'title']
+     *
+     * ПРИМЕР:
+     * Исходный request: { "name": "test", "code": "TEST", "title": "Тест" }
+     * После модификации: { "name": "test_1707654321_abc12", "code": "TEST_1707654321_abc12", "title": "Тест_1707654321_abc12" }
+     */
+    uniqueFields?: string[];
+    /**
+     * НОВОЕ v14.2: Включить автоматическую генерацию уникальных значений
+     * Если false - поля не модифицируются (используются как есть из api_requests)
+     * @default true
+     */
+    enableUniqueFieldGeneration?: boolean;
+    /**
+     * НОВОЕ v14.2: Поля которые должны быть в ВЕРХНЕМ РЕГИСТРЕ (CAPS)
+     * Суффикс будет добавлен и затем вся строка конвертирована в uppercase
+     *
+     * @example ['code', 'sku']
+     * @default ['code']
+     *
+     * ПРИМЕР:
+     * Исходный: { "code": "TEST" }
+     * Результат: { "code": "TEST_1707654321_ABC12" } (весь суффикс тоже в CAPS)
+     */
+    uniqueFieldsUpperCase?: string[];
+    /**
+     * НОВОЕ v14.3: Настройки генерации тестов для 422 ошибок валидации
+     *
+     * ЗАЧЕМ ЭТО НУЖНО:
+     * При валидации данных некоторые запросы возвращают 422 с детальным сообщением об ошибке.
+     * Эти сообщения важны для тестирования валидации - нужно проверять что бэкенд
+     * корректно возвращает ошибки при невалидных данных.
+     *
+     * КАК РАБОТАЕТ:
+     * 1. При валидации собираются все 422 ответы с непустым detail сообщением
+     * 2. Запросы с "Bad Request" без детализации пропускаются и логируются отдельно
+     * 3. Генерируются тесты в отдельную папку с проверкой: 422 статус + ожидаемое сообщение
+     * 4. Тестовые данные выносятся в папку test-data (как в Happy Path)
+     */
+    validationTests?: {
+        /**
+         * Включить генерацию тестов на 422 ошибки
+         * @default false
+         */
+        enabled?: boolean;
+        /**
+         * Папка для выгрузки тестов на валидацию (относительно outputDir)
+         * @default '../validation-tests'
+         * @example '../validation-tests' -> если outputDir='./e2e/happy-path', то тесты будут в './e2e/validation-tests'
+         */
+        outputDir?: string;
+        /**
+         * Путь к JSON файлу для логирования пропущенных "Bad Request" ответов
+         * Сюда попадают 422 ответы без детализации (только "Bad Request")
+         * @default './validation-errors/422-bad-request-skipped.json'
+         */
+        badRequestSkipLogPath?: string;
+        /**
+         * Генерировать отдельные файлы с тестовыми данными (как в Happy Path)
+         * @default true
+         */
+        createSeparateDataFiles?: boolean;
+        /**
+         * Группировать тесты по категориям в подпапки (как в Happy Path)
+         * @default true
+         */
+        groupByCategory?: boolean;
+        /**
+         * Тег для тестов на валидацию
+         * @default '@apiValidation'
+         */
+        testTag?: string;
+        /**
+         * Максимум тестов на один эндпоинт
+         * @default 3
+         */
+        maxTestsPerEndpoint?: number;
+        /**
+         * Паттерны сообщений которые считаются "пустыми" и пропускаются
+         * @default ['Bad Request', 'Validation failed', '']
+         */
+        skipMessagePatterns?: string[];
+    };
+    /**
+     * НОВОЕ v14.4: Настройки генерации тестов для 400 ошибок "Уже существует"
+     *
+     * ЗАЧЕМ ЭТО НУЖНО:
+     * При создании записей с дублирующимися уникальными полями бэкенд возвращает 400
+     * с сообщением типа "Уже существует". Эти тесты важны для проверки валидации.
+     *
+     * КАК РАБОТАЕТ:
+     * 1. При валидации собираются все 400 ответы с непустым сообщением
+     * 2. Для каждого endpoint генерируется 2 теста:
+     *    - Негативный: оригинальные данные → 400 + проверка сообщения из response
+     *    - Позитивный: данные с uniqueFields → 2xx + полная проверка response
+     * 3. Сообщение берётся из реального response (не хардкод!)
+     */
+    duplicateTests?: {
+        /**
+         * Включить генерацию тестов на 400 ошибки дубликатов
+         * @default false
+         */
+        enabled?: boolean;
+        /**
+         * АБСОЛЮТНЫЙ путь к папке для тестов на 400 дубликаты
+         * @example './tests/api/negative-400'
+         */
+        outputDir?: string;
+        /**
+         * Путь к JSON файлу для логирования пропущенных "Bad Request" (400 без сообщения)
+         * @default './validation-errors/400-bad-request-skipped.json'
+         */
+        badRequestSkipLogPath?: string;
+        /**
+         * Генерировать отдельные файлы с тестовыми данными
+         * @default true
+         */
+        createSeparateDataFiles?: boolean;
+        /**
+         * Группировать тесты по категориям в подпапки
+         * @default true
+         */
+        groupByCategory?: boolean;
+        /**
+         * Тег для негативных тестов (400)
+         * @default '@negative400Validation'
+         */
+        testTag?: string;
+        /**
+         * Максимум тестов на один эндпоинт
+         * @default 2
+         */
+        maxTestsPerEndpoint?: number;
+        /**
+         * Паттерны сообщений которые считаются "пустыми" и пропускаются
+         * @default ['Bad Request', '']
+         */
+        skipMessagePatterns?: string[];
+    };
 }
 export declare class HappyPathTestGenerator {
     private sql;
@@ -389,6 +557,53 @@ export declare class HappyPathTestGenerator {
     private endpointToFileName;
     private getSuccessCodeName;
     private markAsGenerated;
+    /**
+     * Генерирует тесты для 422 ошибок валидации
+     * Тесты проверяют: статус 422 + ожидаемое сообщение об ошибке
+     */
+    generateValidation422Tests(validation422Errors: Validation422Error[]): Promise<void>;
+    /**
+     * Группирует 422 ошибки по endpoint + method
+     */
+    private groupValidation422Errors;
+    /**
+     * Генерирует тесты валидации для одного endpoint
+     */
+    private generateValidation422TestsForEndpoint;
+    /**
+     * Генерирует код файла с тестами валидации
+     */
+    private generateValidation422TestFile;
+    /**
+     * Генерирует код одного теста на 422 ошибку
+     */
+    private generateSingle422Test;
+    /**
+     * Генерирует парные тесты для 400 ошибок "Уже существует":
+     * - Негативный тест: оригинальные данные → 400 + проверка сообщения
+     * - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+     */
+    generate400DuplicateTests(duplicate400Errors: Duplicate400Error[]): Promise<void>;
+    /**
+     * Группирует 400 ошибки по endpoint + method
+     */
+    private groupDuplicate400Errors;
+    /**
+     * Генерирует парные тесты для одного endpoint
+     */
+    private generate400TestsForEndpoint;
+    /**
+     * Генерирует код файла с парными тестами на 400
+     */
+    private generate400TestFile;
+    /**
+     * Генерирует негативный тест: оригинальные данные → 400
+     */
+    private generateSingle400NegativeTest;
+    /**
+     * Генерирует позитивный тест: данные с uniqueFields → 2xx
+     */
+    private generateSingle400PositiveTest;
 }
 export declare function generateHappyPathTests(config: HappyPathTestConfig, sqlConnection: any): Promise<void>;
 /**
