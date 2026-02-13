@@ -550,11 +550,13 @@ async function validateRequests(requests, config, axios) {
     // НОВОЕ v14.3: Сбор 422 ошибок
     const validation422Errors = [];
     let badRequestSkippedCount = 0;
-    const skipPatterns = config.skipMessagePatterns || ['Bad Request', 'Validation failed', ''];
+    // ИСПРАВЛЕНИЕ v14.5.1: Пустой массив по умолчанию - собираем все непустые сообщения
+    const skipPatterns = config.skipMessagePatterns || [];
     // НОВОЕ v14.4: Сбор 400 ошибок для парных тестов
     const duplicate400Errors = [];
     let badRequest400SkippedCount = 0;
-    const skip400Patterns = config.skip400MessagePatterns || ['Bad Request', ''];
+    // ИСПРАВЛЕНИЕ v14.5.1: Пустой массив по умолчанию - собираем все непустые сообщения
+    const skip400Patterns = config.skip400MessagePatterns || [];
     console.log(`\n🔍 Валидация ${requests.length} запросов...`);
     for (const request of requests) {
         const result = await validateRequest(request, config, axios);
@@ -583,13 +585,18 @@ async function validateRequests(requests, config, axios) {
         // НОВОЕ v14.3: Обработка 422 ошибок
         if (result.is422Error && config.collect422Errors) {
             const detailMessage = extract422DetailMessage(result.errorResponseData);
-            // Проверяем, является ли сообщение "пустым" (Bad Request и т.д.)
-            const isSkipMessage = skipPatterns.some(pattern => !detailMessage || detailMessage.trim() === '' || detailMessage.includes(pattern));
+            // ИСПРАВЛЕНИЕ v14.5.1: Проверяем есть ли реальное сообщение об ошибке
+            // Пропускаем только если: сообщение пустое ИЛИ совпадает с паттерном пропуска
+            const isEmptyMessage = !detailMessage || detailMessage.trim() === '';
+            const matchesSkipPattern = !isEmptyMessage && skipPatterns
+                .filter(p => p && p.length > 0) // Игнорируем пустые паттерны
+                .some(pattern => detailMessage.toLowerCase().includes(pattern.toLowerCase()));
+            const isSkipMessage = isEmptyMessage || matchesSkipPattern;
             if (isSkipMessage) {
                 // Логируем в файл пропущенных Bad Request
                 badRequestSkippedCount++;
                 await logBadRequestSkipped(request, result.errorResponseData, config);
-                console.log(`  ⏭️  422 Bad Request (пропущен): ${request.method} ${request.endpoint}`);
+                console.log(`  ⏭️  422 пропущен (${isEmptyMessage ? 'пустое сообщение' : 'паттерн'}): ${request.method} ${request.endpoint}`);
             }
             else {
                 // Собираем для генерации тестов
@@ -609,13 +616,18 @@ async function validateRequests(requests, config, axios) {
         // НОВОЕ v14.4: Обработка 400 ошибок (для парных тестов негатив + позитив)
         if (result.is400Error && config.collect400Errors) {
             const detailMessage = extract400DetailMessage(result.errorResponseData);
-            // Проверяем, является ли сообщение "пустым" (Bad Request без детализации)
-            const isSkip400Message = skip400Patterns.some(pattern => !detailMessage || detailMessage.trim() === '' || detailMessage.includes(pattern));
+            // ИСПРАВЛЕНИЕ v14.5.1: Проверяем есть ли реальное сообщение об ошибке
+            // Пропускаем только если: сообщение пустое ИЛИ совпадает с паттерном пропуска
+            const isEmptyMessage = !detailMessage || detailMessage.trim() === '';
+            const matchesSkipPattern = !isEmptyMessage && skip400Patterns
+                .filter(p => p && p.length > 0) // Игнорируем пустые паттерны
+                .some(pattern => detailMessage.toLowerCase().includes(pattern.toLowerCase()));
+            const isSkip400Message = isEmptyMessage || matchesSkipPattern;
             if (isSkip400Message) {
                 // Логируем в файл пропущенных 400 Bad Request
                 badRequest400SkippedCount++;
                 await log400BadRequestSkipped(request, result.errorResponseData, config);
-                console.log(`  ⏭️  400 Bad Request (пропущен): ${request.method} ${request.endpoint}`);
+                console.log(`  ⏭️  400 пропущен (${isEmptyMessage ? 'пустое сообщение' : 'паттерн'}): ${request.method} ${request.endpoint}`);
             }
             else {
                 // Собираем для генерации парных тестов (негатив 400 + позитив с unique)

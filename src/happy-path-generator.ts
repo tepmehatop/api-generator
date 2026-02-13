@@ -1013,6 +1013,7 @@ export class HappyPathTestGenerator {
       },
 
       // НОВОЕ v14.3: Дефолтные настройки генерации тестов на валидацию (422)
+      // ИСПРАВЛЕНИЕ v14.5.1: Убраны пустые паттерны, добавлены реальные паттерны пропуска
       validationTests: {
         enabled: false, // По умолчанию выключено
         outputDir: '../validation-tests',
@@ -1021,11 +1022,12 @@ export class HappyPathTestGenerator {
         groupByCategory: true,
         testTag: '@apiValidation',
         maxTestsPerEndpoint: 3,
-        skipMessagePatterns: ['Bad Request', 'Validation failed', ''],
+        skipMessagePatterns: [], // Пустой - собираем все сообщения кроме пустых
         ...(config.validationTests || {})
       },
 
       // НОВОЕ v14.4: Дефолтные настройки генерации тестов на 400 дубликаты
+      // ИСПРАВЛЕНИЕ v14.5.1: Убраны пустые паттерны
       duplicateTests: {
         enabled: false, // По умолчанию выключено
         outputDir: './tests/api/negative-400',
@@ -1034,7 +1036,7 @@ export class HappyPathTestGenerator {
         groupByCategory: true,
         testTag: '@negative400Validation',
         maxTestsPerEndpoint: 2,
-        skipMessagePatterns: ['Bad Request', ''],
+        skipMessagePatterns: [], // Пустой - собираем все сообщения кроме пустых
         ...(config.duplicateTests || {})
       }
     };
@@ -1549,7 +1551,14 @@ export class HappyPathTestGenerator {
     ];
 
     // ИСПРАВЛЕНИЕ 11: Импорт функций сравнения из NPM пакета
-    imports.push(`import { compareDbWithResponse, formatDifferencesAsBlocks } from '${this.config.packageName}/dist/utils/data-comparison';`);
+    // ИСПРАВЛЕНИЕ v14.5.1: formatDifferencesAsBlocks импортируется из test-helpers если createSeparateDataFiles=true
+    if (this.config.createSeparateDataFiles) {
+      // Только compareDbWithResponse - formatDifferencesAsBlocks придёт из test-helpers
+      imports.push(`import { compareDbWithResponse } from '${this.config.packageName}/dist/utils/data-comparison';`);
+    } else {
+      // Обе функции из пакета
+      imports.push(`import { compareDbWithResponse, formatDifferencesAsBlocks } from '${this.config.packageName}/dist/utils/data-comparison';`);
+    }
 
     // Импорт axios конфига
     if (this.config.axiosConfigPath && this.config.axiosConfigName) {
