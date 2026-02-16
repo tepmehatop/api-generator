@@ -48,7 +48,8 @@ export {
   normalizeDbData,
   convertDataTypes,
   deepCompareObjects,
-  compareDbWithResponse
+  compareDbWithResponse,
+  formatDifferencesAsBlocks
 } from './utils/data-comparison';
 
 // НОВОЕ v14.1: Экспорт утилиты для email уведомлений об ошибках

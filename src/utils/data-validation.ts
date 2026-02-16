@@ -542,7 +542,9 @@ function generateCurlCommand(
 
   if (['POST', 'PUT', 'PATCH'].includes(method) && requestBody) {
     curl += ` \\\n  -H 'Content-Type: application/json'`;
-    curl += ` \\\n  -d '${JSON.stringify(requestBody)}'`;
+    // Если requestBody уже строка (JSON) - используем как есть, иначе stringify
+    const bodyStr = typeof requestBody === 'string' ? requestBody : JSON.stringify(requestBody);
+    curl += ` \\\n  -d '${bodyStr}'`;
   }
 
   return curl;

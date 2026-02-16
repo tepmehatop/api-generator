@@ -967,7 +967,17 @@ function createHappyPathDataFile(methodName, happyPathData, outputDir) {
     lines.push('  happyPath: [');
     happyPathData.forEach((data, index) => {
         const requestBody = data.request_body || {};
-        const rowStr = JSON.stringify(requestBody, null, 4);
+        // Если requestBody уже строка (JSON) - парсим перед stringify для правильного форматирования
+        let bodyToStringify = requestBody;
+        if (typeof requestBody === 'string') {
+            try {
+                bodyToStringify = JSON.parse(requestBody);
+            }
+            catch {
+                bodyToStringify = requestBody;
+            }
+        }
+        const rowStr = JSON.stringify(bodyToStringify, null, 4);
         const comma = index < happyPathData.length - 1 ? ',' : '';
         lines.push(`    ${rowStr}${comma}`);
     });

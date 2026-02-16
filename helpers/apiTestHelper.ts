@@ -109,23 +109,18 @@ export function customMessageData(
       lines.push('');
     }
     
-    // CURL команда
+    // CURL команда (простой вывод без рамки для удобного копирования)
     lines.push('📋 CURL Command (можно скопировать и выполнить):');
     lines.push('');
-    lines.push('┌─────────────────────────────────────────────────────────────────────────────┐');
-    
+
     const curlCommand = generateCurlCommand(
       config.url || '',
       config.method || 'GET',
       config.headers as Record<string, string>,
       config.data
     );
-    
-    curlCommand.split('\n').forEach(line => {
-      lines.push(`│ ${line.padEnd(75)} │`);
-    });
-    
-    lines.push('└─────────────────────────────────────────────────────────────────────────────┘');
+
+    lines.push(curlCommand);
     lines.push('');
     
   } else if (response && response.config) {
@@ -142,23 +137,18 @@ export function customMessageData(
     lines.push(`   Status: ${response.status} ${response.statusText}`);
     lines.push('');
     
-    // CURL команда
+    // CURL команда (простой вывод без рамки для удобного копирования)
     lines.push('📋 CURL Command (можно скопировать и выполнить):');
     lines.push('');
-    lines.push('┌─────────────────────────────────────────────────────────────────────────────┐');
-    
+
     const curlCommand = generateCurlCommand(
       config.url || '',
       config.method || 'GET',
       config.headers as Record<string, string>,
       config.data
     );
-    
-    curlCommand.split('\n').forEach(line => {
-      lines.push(`│ ${line.padEnd(75)} │`);
-    });
-    
-    lines.push('└─────────────────────────────────────────────────────────────────────────────┘');
+
+    lines.push(curlCommand);
     lines.push('');
   }
   
@@ -255,7 +245,11 @@ export async function handleApiError(params: HandleApiErrorParams): Promise<neve
   console.error('Full URL:', fullUrl);
 
   if (requestBody) {
-    console.error('Request:', JSON.stringify(requestBody, null, 2));
+    // Если requestBody уже строка (JSON) - выводим как есть, иначе stringify
+    const requestBodyStr = typeof requestBody === 'string'
+      ? requestBody
+      : JSON.stringify(requestBody, null, 2);
+    console.error('Request:', requestBodyStr);
   }
 
   console.error('Response status:', errorStatus);

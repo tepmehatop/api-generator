@@ -969,12 +969,22 @@ ${tests.join('\n\n')}
             else {
                 normalizedResponse = (0, data_comparison_1.normalizeDbData)(request.response_body);
             }
+            // ИСПРАВЛЕНИЕ v14.5.2: Если request_body строка - парсим перед stringify
+            let requestBodyForExport = request.request_body;
+            if (typeof requestBodyForExport === 'string') {
+                try {
+                    requestBodyForExport = JSON.parse(requestBodyForExport);
+                }
+                catch {
+                    // Если парсинг не удался - оставляем как есть
+                }
+            }
             const dataContent = `/**
  * Тестовые данные для ${method} ${endpoint}
  * DB ID: ${request.id}
  */
 
-export const requestData = ${JSON.stringify(request.request_body, null, 2)};
+export const requestData = ${JSON.stringify(requestBodyForExport, null, 2)};
 
 // Нормализованный response (готовый для сравнения)
 export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, null, 2)};
@@ -1012,8 +1022,18 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         }
         else {
             if (hasBody) {
-                testCode += `    const requestData = ${JSON.stringify(request.request_body, null, 4).replace(/^/gm, '    ')};
-    
+                // ИСПРАВЛЕНИЕ v14.5.2: Если request_body строка - парсим перед stringify
+                let requestBodyObj = request.request_body;
+                if (typeof requestBodyObj === 'string') {
+                    try {
+                        requestBodyObj = JSON.parse(requestBodyObj);
+                    }
+                    catch {
+                        // Если парсинг не удался - оставляем как есть
+                    }
+                }
+                testCode += `    const requestData = ${JSON.stringify(requestBodyObj, null, 4).replace(/^/gm, '    ')};
+
 `;
             }
             // ИСПРАВЛЕНИЕ 7: Нормализуем на основе DTO

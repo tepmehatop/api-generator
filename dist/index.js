@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ApiGenerator = exports.generateDtoValidationCode = exports.findDtoForEndpoint = exports.generateTypeValidationCode = exports.isServerError = exports.sendErrorNotification = exports.generateCurlCommand = exports.generateErrorEmailHtml = exports.compareDbWithResponse = exports.deepCompareObjects = exports.convertDataTypes = exports.normalizeDbData = exports.collectApiData = exports.createCollector = exports.sendCollectedData = exports.setupApiCollector = exports.reActualizeHappyPathTests = exports.HappyPathTestGenerator = exports.generateHappyPathTests = exports.analyzeAndGenerateTestData = exports.generatePairwiseTests = exports.generatePositiveTests = exports.generateNegativeTests = exports.generateApiTests = void 0;
+exports.ApiGenerator = exports.generateDtoValidationCode = exports.findDtoForEndpoint = exports.generateTypeValidationCode = exports.isServerError = exports.sendErrorNotification = exports.generateCurlCommand = exports.generateErrorEmailHtml = exports.formatDifferencesAsBlocks = exports.compareDbWithResponse = exports.deepCompareObjects = exports.convertDataTypes = exports.normalizeDbData = exports.collectApiData = exports.createCollector = exports.sendCollectedData = exports.setupApiCollector = exports.reActualizeHappyPathTests = exports.HappyPathTestGenerator = exports.generateHappyPathTests = exports.analyzeAndGenerateTestData = exports.generatePairwiseTests = exports.generatePositiveTests = exports.generateNegativeTests = exports.generateApiTests = void 0;
 exports.generateApi = generateApi;
 const axios_1 = __importDefault(require("axios"));
 const fs = __importStar(require("fs"));
@@ -71,6 +71,7 @@ Object.defineProperty(exports, "normalizeDbData", { enumerable: true, get: funct
 Object.defineProperty(exports, "convertDataTypes", { enumerable: true, get: function () { return data_comparison_1.convertDataTypes; } });
 Object.defineProperty(exports, "deepCompareObjects", { enumerable: true, get: function () { return data_comparison_1.deepCompareObjects; } });
 Object.defineProperty(exports, "compareDbWithResponse", { enumerable: true, get: function () { return data_comparison_1.compareDbWithResponse; } });
+Object.defineProperty(exports, "formatDifferencesAsBlocks", { enumerable: true, get: function () { return data_comparison_1.formatDifferencesAsBlocks; } });
 // НОВОЕ v14.1: Экспорт утилиты для email уведомлений об ошибках
 var error_notification_1 = require("./utils/error-notification");
 Object.defineProperty(exports, "generateErrorEmailHtml", { enumerable: true, get: function () { return error_notification_1.generateErrorEmailHtml; } });
