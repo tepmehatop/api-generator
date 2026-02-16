@@ -1462,7 +1462,17 @@ import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
 `;
             for (let i = 0; i < errors.length; i++) {
                 const error = errors[i];
-                dataCode += `export const requestData${i + 1} = ${JSON.stringify(error.requestBody, null, 2)};\n\n`;
+                // ИСПРАВЛЕНИЕ v14.5.2: Если requestBody строка - парсим перед stringify
+                let requestBodyForExport = error.requestBody;
+                if (typeof requestBodyForExport === 'string') {
+                    try {
+                        requestBodyForExport = JSON.parse(requestBodyForExport);
+                    }
+                    catch {
+                        // Если парсинг не удался - оставляем как есть
+                    }
+                }
+                dataCode += `export const requestData${i + 1} = ${JSON.stringify(requestBodyForExport, null, 2)};\n\n`;
                 dataCode += `export const expectedError${i + 1} = ${JSON.stringify({
                     status: 422,
                     detailMessage: error.detailMessage,
@@ -1517,7 +1527,17 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
         }
         else {
             if (hasBody) {
-                testCode += `    const requestData = ${JSON.stringify(error.requestBody, null, 4).replace(/^/gm, '    ')};
+                // ИСПРАВЛЕНИЕ v14.5.2: Если requestBody строка - парсим перед stringify
+                let requestBodyObj = error.requestBody;
+                if (typeof requestBodyObj === 'string') {
+                    try {
+                        requestBodyObj = JSON.parse(requestBodyObj);
+                    }
+                    catch {
+                        // Если парсинг не удался - оставляем как есть
+                    }
+                }
+                testCode += `    const requestData = ${JSON.stringify(requestBodyObj, null, 4).replace(/^/gm, '    ')};
 `;
             }
             testCode += `    const expectedErrorData = {
@@ -1760,8 +1780,18 @@ import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
 `;
             for (let i = 0; i < errors.length; i++) {
                 const error = errors[i];
+                // ИСПРАВЛЕНИЕ v14.5.2: Если requestBody строка - парсим перед stringify
+                let requestBodyForExport = error.requestBody;
+                if (typeof requestBodyForExport === 'string') {
+                    try {
+                        requestBodyForExport = JSON.parse(requestBodyForExport);
+                    }
+                    catch {
+                        // Если парсинг не удался - оставляем как есть
+                    }
+                }
                 dataCode += `// Тест #${i + 1}\n`;
-                dataCode += `export const requestData${i + 1} = ${JSON.stringify(error.requestBody, null, 2)};\n\n`;
+                dataCode += `export const requestData${i + 1} = ${JSON.stringify(requestBodyForExport, null, 2)};\n\n`;
                 dataCode += `export const expectedError${i + 1} = ${JSON.stringify({
                     status: 400,
                     detailMessage: error.detailMessage,
@@ -1826,7 +1856,17 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
         }
         else {
             if (hasBody) {
-                testCode += `    const requestData = ${JSON.stringify(error.requestBody, null, 4).replace(/^/gm, '    ')};
+                // ИСПРАВЛЕНИЕ v14.5.2: Если requestBody строка - парсим перед stringify
+                let requestBodyObj = error.requestBody;
+                if (typeof requestBodyObj === 'string') {
+                    try {
+                        requestBodyObj = JSON.parse(requestBodyObj);
+                    }
+                    catch {
+                        // Если парсинг не удался - оставляем как есть
+                    }
+                }
+                testCode += `    const requestData = ${JSON.stringify(requestBodyObj, null, 4).replace(/^/gm, '    ')};
 `;
             }
             testCode += `    const expectedErrorData = {
@@ -1917,7 +1957,17 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
         }
         else {
             if (hasBody) {
-                testCode += `    const requestData = ${JSON.stringify(error.requestBody, null, 4).replace(/^/gm, '    ')};
+                // ИСПРАВЛЕНИЕ v14.5.2: Если requestBody строка - парсим перед stringify
+                let requestBodyObj = error.requestBody;
+                if (typeof requestBodyObj === 'string') {
+                    try {
+                        requestBodyObj = JSON.parse(requestBodyObj);
+                    }
+                    catch {
+                        // Если парсинг не удался - оставляем как есть
+                    }
+                }
+                testCode += `    const requestData = ${JSON.stringify(requestBodyObj, null, 4).replace(/^/gm, '    ')};
 `;
             }
             testCode += `    const expectedSuccessData = {
