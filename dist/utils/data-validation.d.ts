@@ -73,6 +73,12 @@ export interface ValidationConfig {
      */
     skipMessagePatterns?: string[];
     /**
+     * НОВОЕ v14.5.2: Пропускать 422 ответы с пустым response body
+     * Если true - запросы где response пустой ({}, [], null) не будут генерировать тесты
+     * @default true
+     */
+    skipEmptyResponse422?: boolean;
+    /**
      * Включить сбор 400 ошибок для генерации тестов на дубликаты
      * @default false
      */
@@ -87,6 +93,12 @@ export interface ValidationConfig {
      * @default ['Bad Request', '']
      */
     skip400MessagePatterns?: string[];
+    /**
+     * НОВОЕ v14.5.2: Пропускать 400 ответы с пустым response body
+     * Если true - запросы где response пустой ({}, [], null) не будут генерировать тесты
+     * @default true
+     */
+    skipEmptyResponse400?: boolean;
 }
 /**
  * НОВОЕ v14.3: Структура 422 ошибки для генерации тестов

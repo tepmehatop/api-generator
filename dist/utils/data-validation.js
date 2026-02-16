@@ -554,11 +554,15 @@ async function validateRequests(requests, config, axios) {
     let badRequestSkippedCount = 0;
     // ИСПРАВЛЕНИЕ v14.5.1: Пустой массив по умолчанию - собираем все непустые сообщения
     const skipPatterns = config.skipMessagePatterns || [];
+    // НОВОЕ v14.5.2: Пропуск пустых response (по умолчанию true)
+    const skipEmptyResponse422 = config.skipEmptyResponse422 !== false;
     // НОВОЕ v14.4: Сбор 400 ошибок для парных тестов
     const duplicate400Errors = [];
     let badRequest400SkippedCount = 0;
     // ИСПРАВЛЕНИЕ v14.5.1: Пустой массив по умолчанию - собираем все непустые сообщения
     const skip400Patterns = config.skip400MessagePatterns || [];
+    // НОВОЕ v14.5.2: Пропуск пустых response (по умолчанию true)
+    const skipEmptyResponse400 = config.skipEmptyResponse400 !== false;
     console.log(`\n🔍 Валидация ${requests.length} запросов...`);
     for (const request of requests) {
         const result = await validateRequest(request, config, axios);
@@ -588,17 +592,20 @@ async function validateRequests(requests, config, axios) {
         if (result.is422Error && config.collect422Errors) {
             const detailMessage = extract422DetailMessage(result.errorResponseData);
             // ИСПРАВЛЕНИЕ v14.5.1: Проверяем есть ли реальное сообщение об ошибке
-            // Пропускаем только если: сообщение пустое ИЛИ совпадает с паттерном пропуска
+            // ИСПРАВЛЕНИЕ v14.5.2: Учитываем параметр skipEmptyResponse422
+            // Пропускаем только если: (сообщение пустое И skipEmptyResponse422=true) ИЛИ совпадает с паттерном пропуска
             const isEmptyMessage = !detailMessage || detailMessage.trim() === '';
+            const shouldSkipEmpty = isEmptyMessage && skipEmptyResponse422;
             const matchesSkipPattern = !isEmptyMessage && skipPatterns
                 .filter(p => p && p.length > 0) // Игнорируем пустые паттерны
                 .some(pattern => detailMessage.toLowerCase().includes(pattern.toLowerCase()));
-            const isSkipMessage = isEmptyMessage || matchesSkipPattern;
+            const isSkipMessage = shouldSkipEmpty || matchesSkipPattern;
             if (isSkipMessage) {
                 // Логируем в файл пропущенных Bad Request
                 badRequestSkippedCount++;
                 await logBadRequestSkipped(request, result.errorResponseData, config);
-                console.log(`  ⏭️  422 пропущен (${isEmptyMessage ? 'пустое сообщение' : 'паттерн'}): ${request.method} ${request.endpoint}`);
+                const skipReason = shouldSkipEmpty ? 'пустой response' : 'паттерн';
+                console.log(`  ⏭️  422 пропущен (${skipReason}): ${request.method} ${request.endpoint}`);
             }
             else {
                 // Собираем для генерации тестов
@@ -619,17 +626,20 @@ async function validateRequests(requests, config, axios) {
         if (result.is400Error && config.collect400Errors) {
             const detailMessage = extract400DetailMessage(result.errorResponseData);
             // ИСПРАВЛЕНИЕ v14.5.1: Проверяем есть ли реальное сообщение об ошибке
-            // Пропускаем только если: сообщение пустое ИЛИ совпадает с паттерном пропуска
+            // ИСПРАВЛЕНИЕ v14.5.2: Учитываем параметр skipEmptyResponse400
+            // Пропускаем только если: (сообщение пустое И skipEmptyResponse400=true) ИЛИ совпадает с паттерном пропуска
             const isEmptyMessage = !detailMessage || detailMessage.trim() === '';
+            const shouldSkipEmpty = isEmptyMessage && skipEmptyResponse400;
             const matchesSkipPattern = !isEmptyMessage && skip400Patterns
                 .filter(p => p && p.length > 0) // Игнорируем пустые паттерны
                 .some(pattern => detailMessage.toLowerCase().includes(pattern.toLowerCase()));
-            const isSkip400Message = isEmptyMessage || matchesSkipPattern;
+            const isSkip400Message = shouldSkipEmpty || matchesSkipPattern;
             if (isSkip400Message) {
                 // Логируем в файл пропущенных 400 Bad Request
                 badRequest400SkippedCount++;
                 await log400BadRequestSkipped(request, result.errorResponseData, config);
-                console.log(`  ⏭️  400 пропущен (${isEmptyMessage ? 'пустое сообщение' : 'паттерн'}): ${request.method} ${request.endpoint}`);
+                const skipReason = shouldSkipEmpty ? 'пустой response' : 'паттерн';
+                console.log(`  ⏭️  400 пропущен (${skipReason}): ${request.method} ${request.endpoint}`);
             }
             else {
                 // Собираем для генерации парных тестов (негатив 400 + позитив с unique)
@@ -681,10 +691,15 @@ async function validateRequests(requests, config, axios) {
 }
 /**
  * НОВОЕ v14.3: Извлекает детальное сообщение из 422 ответа
+ * ИСПРАВЛЕНИЕ v14.5.2: Пустой объект {} возвращает пустую строку
  */
 function extract422DetailMessage(responseData) {
     if (!responseData)
         return '';
+    // ИСПРАВЛЕНИЕ v14.5.2: Проверка на пустой объект
+    if (typeof responseData === 'object' && !Array.isArray(responseData) && Object.keys(responseData).length === 0) {
+        return '';
+    }
     // Типичные форматы ответов:
     // { "detail": "..." }
     // { "message": "..." }
@@ -699,6 +714,10 @@ function extract422DetailMessage(responseData) {
         if (typeof responseData.detail === 'object' && responseData.detail.message) {
             return responseData.detail.message;
         }
+        // Проверка на пустой объект в detail
+        if (typeof responseData.detail === 'object' && Object.keys(responseData.detail).length === 0) {
+            return '';
+        }
         return JSON.stringify(responseData.detail);
     }
     if (responseData.message)
@@ -706,16 +725,28 @@ function extract422DetailMessage(responseData) {
     if (responseData.error)
         return responseData.error;
     if (responseData.errors && Array.isArray(responseData.errors)) {
+        if (responseData.errors.length === 0)
+            return '';
         return responseData.errors.map((e) => e.message || e.msg || JSON.stringify(e)).join('; ');
     }
-    return JSON.stringify(responseData);
+    // ИСПРАВЛЕНИЕ v14.5.2: Если остался только объект без полезных данных - считаем пустым
+    const stringified = JSON.stringify(responseData);
+    if (stringified === '{}' || stringified === '[]' || stringified === 'null') {
+        return '';
+    }
+    return stringified;
 }
 /**
  * НОВОЕ v14.4: Извлекает детальное сообщение из 400 ответа
+ * ИСПРАВЛЕНИЕ v14.5.2: Пустой объект {} возвращает пустую строку
  */
 function extract400DetailMessage(responseData) {
     if (!responseData)
         return '';
+    // ИСПРАВЛЕНИЕ v14.5.2: Проверка на пустой объект
+    if (typeof responseData === 'object' && !Array.isArray(responseData) && Object.keys(responseData).length === 0) {
+        return '';
+    }
     // Типичные форматы ответов для 400 "Уже существует":
     // { "detail": "Уже существует" }
     // { "message": "Объект с таким именем уже существует" }
@@ -728,6 +759,10 @@ function extract400DetailMessage(responseData) {
         if (typeof responseData.detail === 'object' && responseData.detail.message) {
             return responseData.detail.message;
         }
+        // Проверка на пустой объект в detail
+        if (typeof responseData.detail === 'object' && Object.keys(responseData.detail).length === 0) {
+            return '';
+        }
         return JSON.stringify(responseData.detail);
     }
     if (responseData.message)
@@ -735,9 +770,16 @@ function extract400DetailMessage(responseData) {
     if (responseData.error)
         return responseData.error;
     if (responseData.errors && Array.isArray(responseData.errors)) {
+        if (responseData.errors.length === 0)
+            return '';
         return responseData.errors.map((e) => e.message || e.msg || JSON.stringify(e)).join('; ');
     }
-    return JSON.stringify(responseData);
+    // ИСПРАВЛЕНИЕ v14.5.2: Если остался только объект без полезных данных - считаем пустым
+    const stringified = JSON.stringify(responseData);
+    if (stringified === '{}' || stringified === '[]' || stringified === 'null') {
+        return '';
+    }
+    return stringified;
 }
 /**
  * НОВОЕ v14.4: Логирует пропущенный 400 Bad Request в JSON файл

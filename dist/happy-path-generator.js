@@ -584,10 +584,14 @@ class HappyPathTestGenerator {
                     collect422Errors: this.config.validationTests.enabled,
                     badRequestSkipLogPath: this.config.validationTests.badRequestSkipLogPath,
                     skipMessagePatterns: this.config.validationTests.skipMessagePatterns,
+                    // НОВОЕ v14.5.2: Пропуск пустых response для 422
+                    skipEmptyResponse422: this.config.validationTests.skipEmptyResponse !== false,
                     // НОВОЕ v14.4: Сбор 400 ошибок для парных тестов
                     collect400Errors: this.config.duplicateTests.enabled,
                     badRequest400SkipLogPath: this.config.duplicateTests.badRequestSkipLogPath,
-                    skip400MessagePatterns: this.config.duplicateTests.skipMessagePatterns
+                    skip400MessagePatterns: this.config.duplicateTests.skipMessagePatterns,
+                    // НОВОЕ v14.5.2: Пропуск пустых response для 400
+                    skipEmptyResponse400: this.config.duplicateTests.skipEmptyResponse !== false
                 };
                 if (this.config.debug) {
                     console.log(`🐛 Конфиг валидации:`, {
@@ -1397,7 +1401,7 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         if (!fs.existsSync(categoryDir)) {
             fs.mkdirSync(categoryDir, { recursive: true });
         }
-        const testFilePath = path.join(categoryDir, `${fileName}.spec.ts`);
+        const testFilePath = path.join(categoryDir, `${fileName}.test.ts`);
         const testDataDir = path.join(categoryDir, 'test-data');
         // Проверяем существует ли уже файл
         if (fs.existsSync(testFilePath) && !this.config.force) {
@@ -1693,7 +1697,7 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
         if (!fs.existsSync(categoryDir)) {
             fs.mkdirSync(categoryDir, { recursive: true });
         }
-        const testFilePath = path.join(categoryDir, `${fileName}.spec.ts`);
+        const testFilePath = path.join(categoryDir, `${fileName}.test.ts`);
         const testDataDir = path.join(categoryDir, 'test-data');
         // Проверяем существует ли уже файл
         if (fs.existsSync(testFilePath) && !this.config.force) {

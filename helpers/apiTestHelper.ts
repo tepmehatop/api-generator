@@ -40,6 +40,7 @@ export interface HandleApiErrorParams {
 
 /**
  * Генерирует CURL команду из axios response или error
+ * ИСПРАВЛЕНИЕ v14.5.2: Однострочный CURL для удобного копирования в Postman
  */
 export function generateCurlCommand(
   url: string,
@@ -47,28 +48,22 @@ export function generateCurlCommand(
   headers?: Record<string, string>,
   data?: any
 ): string {
-  const lines: string[] = [];
-  
-  lines.push(`curl -X ${method.toUpperCase()} '${url}' \\`);
-  
+  let curl = `curl -X ${method.toUpperCase()} '${url}'`;
+
   // Добавляем headers
   if (headers) {
     Object.entries(headers).forEach(([key, value]) => {
-      lines.push(`  -H '${key}: ${value}' \\`);
+      curl += ` -H '${key}: ${value}'`;
     });
   }
-  
+
   // Добавляем data если есть
   if (data && (method.toUpperCase() === 'POST' || method.toUpperCase() === 'PUT' || method.toUpperCase() === 'PATCH')) {
-    const dataStr = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-    lines.push(`  -d '${dataStr.replace(/'/g, "\\'")}'`);
-  } else {
-    // Убираем последний обратный слеш
-    const lastLine = lines[lines.length - 1];
-    lines[lines.length - 1] = lastLine.replace(' \\', '');
+    const dataStr = typeof data === 'string' ? data : JSON.stringify(data);
+    curl += ` -d '${dataStr.replace(/'/g, "\\'")}'`;
   }
-  
-  return lines.join('\n');
+
+  return curl;
 }
 
 /**

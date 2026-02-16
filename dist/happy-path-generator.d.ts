@@ -452,6 +452,12 @@ export interface HappyPathTestConfig {
          * @default ['Bad Request', 'Validation failed', '']
          */
         skipMessagePatterns?: string[];
+        /**
+         * НОВОЕ v14.5.2: Пропускать 422 ответы с пустым response body
+         * Если true - запросы где response пустой ({}, [], null) не будут генерировать тесты
+         * @default true
+         */
+        skipEmptyResponse?: boolean;
     };
     /**
      * НОВОЕ v14.4: Настройки генерации тестов для 400 ошибок "Уже существует"
@@ -508,6 +514,12 @@ export interface HappyPathTestConfig {
          * @default ['Bad Request', '']
          */
         skipMessagePatterns?: string[];
+        /**
+         * НОВОЕ v14.5.2: Пропускать 400 ответы с пустым response body
+         * Если true - запросы где response пустой ({}, [], null) не будут генерировать тесты
+         * @default true
+         */
+        skipEmptyResponse?: boolean;
     };
 }
 export declare class HappyPathTestGenerator {

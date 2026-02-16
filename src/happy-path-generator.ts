@@ -561,6 +561,13 @@ export interface HappyPathTestConfig {
      * @default ['Bad Request', 'Validation failed', '']
      */
     skipMessagePatterns?: string[];
+
+    /**
+     * НОВОЕ v14.5.2: Пропускать 422 ответы с пустым response body
+     * Если true - запросы где response пустой ({}, [], null) не будут генерировать тесты
+     * @default true
+     */
+    skipEmptyResponse?: boolean;
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -629,6 +636,13 @@ export interface HappyPathTestConfig {
      * @default ['Bad Request', '']
      */
     skipMessagePatterns?: string[];
+
+    /**
+     * НОВОЕ v14.5.2: Пропускать 400 ответы с пустым response body
+     * Если true - запросы где response пустой ({}, [], null) не будут генерировать тесты
+     * @default true
+     */
+    skipEmptyResponse?: boolean;
   };
 }
 
@@ -1206,10 +1220,14 @@ export class HappyPathTestGenerator {
           collect422Errors: this.config.validationTests.enabled,
           badRequestSkipLogPath: this.config.validationTests.badRequestSkipLogPath,
           skipMessagePatterns: this.config.validationTests.skipMessagePatterns,
+          // НОВОЕ v14.5.2: Пропуск пустых response для 422
+          skipEmptyResponse422: this.config.validationTests.skipEmptyResponse !== false,
           // НОВОЕ v14.4: Сбор 400 ошибок для парных тестов
           collect400Errors: this.config.duplicateTests.enabled,
           badRequest400SkipLogPath: this.config.duplicateTests.badRequestSkipLogPath,
-          skip400MessagePatterns: this.config.duplicateTests.skipMessagePatterns
+          skip400MessagePatterns: this.config.duplicateTests.skipMessagePatterns,
+          // НОВОЕ v14.5.2: Пропуск пустых response для 400
+          skipEmptyResponse400: this.config.duplicateTests.skipEmptyResponse !== false
         };
 
         if (this.config.debug) {
@@ -2158,7 +2176,7 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
       fs.mkdirSync(categoryDir, { recursive: true });
     }
 
-    const testFilePath = path.join(categoryDir, `${fileName}.spec.ts`);
+    const testFilePath = path.join(categoryDir, `${fileName}.test.ts`);
     const testDataDir = path.join(categoryDir, 'test-data');
 
     // Проверяем существует ли уже файл
@@ -2514,7 +2532,7 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
       fs.mkdirSync(categoryDir, { recursive: true });
     }
 
-    const testFilePath = path.join(categoryDir, `${fileName}.spec.ts`);
+    const testFilePath = path.join(categoryDir, `${fileName}.test.ts`);
     const testDataDir = path.join(categoryDir, 'test-data');
 
     // Проверяем существует ли уже файл
