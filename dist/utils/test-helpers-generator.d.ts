@@ -1,11 +1,12 @@
 /**
  * Генератор helper функций для тестов
- * ВЕРСИЯ 14.5.2
+ * ВЕРСИЯ 14.5.4
  *
  * Генерирует вспомогательные функции которые выносятся в test-data:
  * - prepareUniqueFields - подготовка уникальных значений для POST/PUT/PATCH
  * - buildCurlCommand - генерация CURL команды (однострочная, без двойного экранирования)
  * - compareWithoutUniqueFields - сравнение response без уникальных полей
+ * - compareWithFieldOptions - сравнение с учётом skipCompareFields и ignoreFieldValues
  * - verifyUniqueFields - проверка уникальных полей в response
  * - formatDifferencesAsBlocks - форматирование различий (реэкспорт)
  */
@@ -13,6 +14,8 @@ export interface TestHelpersConfig {
     uniqueFields: string[];
     uniqueFieldsUpperCase: string[];
     packageName: string;
+    skipCompareFields?: string[];
+    ignoreFieldValues?: string[];
 }
 /**
  * Генерирует код файла с helper функциями

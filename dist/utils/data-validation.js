@@ -191,8 +191,50 @@ function compareObjects(oldObj, newObj, config, path = 'root') {
     return changes;
 }
 /**
+ * Выполняет один HTTP запрос к API
+ * НОВОЕ v14.5.4: Вынесено в отдельную функцию для поддержки retries
+ */
+async function executeApiRequest(axios, method, fullUrl, requestBody, axiosConfig) {
+    try {
+        // ВАЖНО: Создаём конфиг с validateStatus чтобы 4xx не бросали исключения
+        const configWithValidation = {
+            ...axiosConfig,
+            validateStatus: (status) => status < 500 // 4xx не считаем ошибкой
+        };
+        let response;
+        if (method === 'GET') {
+            response = await axios.get(fullUrl, configWithValidation);
+        }
+        else if (method === 'POST') {
+            response = await axios.post(fullUrl, requestBody, configWithValidation);
+        }
+        else if (method === 'PUT') {
+            response = await axios.put(fullUrl, requestBody, configWithValidation);
+        }
+        else if (method === 'PATCH') {
+            response = await axios.patch(fullUrl, requestBody, configWithValidation);
+        }
+        else if (method === 'DELETE') {
+            response = await axios.delete(fullUrl, configWithValidation);
+        }
+        else {
+            return { status: 0, data: null, error: `Неподдерживаемый метод: ${method}` };
+        }
+        return { status: response.status, data: response.data };
+    }
+    catch (error) {
+        // 5xx ошибки или сетевые проблемы
+        return {
+            status: error.response?.status || 0,
+            data: error.response?.data,
+            error: error
+        };
+    }
+}
+/**
  * Валидирует request - проверяет актуальность данных
  * Вызывает LIVE API и сравнивает с сохраненным response
+ * НОВОЕ v14.5.4: Поддержка validationRetries для POST/PUT/PATCH
  */
 async function validateRequest(request, config, axios) {
     if (!config.enabled || !config.validateBeforeGeneration) {
@@ -203,98 +245,70 @@ async function validateRequest(request, config, axios) {
             action: 'keep'
         };
     }
-    try {
-        // Вызываем LIVE API
-        const standUrl = config.standUrl || '';
-        if (!standUrl) {
-            console.warn(`⚠️  Stand URL не указан в конфигурации валидации`);
-            return {
-                isValid: true,
-                isStale: false,
-                changes: [],
-                action: 'keep'
-            };
-        }
-        const fullUrl = standUrl + request.endpoint;
-        console.log(`🔍 Валидация: ${request.method} ${fullUrl}`);
-        let liveResponse;
-        if (request.method === 'GET') {
-            liveResponse = await axios.get(fullUrl, config.axiosConfig);
-        }
-        else if (request.method === 'POST') {
-            liveResponse = await axios.post(fullUrl, request.request_body, config.axiosConfig);
-        }
-        else if (request.method === 'PUT') {
-            liveResponse = await axios.put(fullUrl, request.request_body, config.axiosConfig);
-        }
-        else if (request.method === 'PATCH') {
-            liveResponse = await axios.patch(fullUrl, request.request_body, config.axiosConfig);
-        }
-        else if (request.method === 'DELETE') {
-            liveResponse = await axios.delete(fullUrl, config.axiosConfig);
-        }
-        else {
-            console.warn(`⚠️  Неподдерживаемый метод: ${request.method}`);
-            return {
-                isValid: true,
-                isStale: false,
-                changes: [],
-                action: 'keep'
-            };
-        }
-        // Сравниваем ответы
-        const changes = compareObjects(request.response_body, liveResponse.data, config);
-        // Проверяем есть ли значимые изменения
-        const significantChanges = changes.filter(c => c.isSignificant);
-        const isStale = significantChanges.length > 0;
-        // Логируем изменения
-        if (config.logChanges && changes.length > 0) {
-            await logChanges(request, changes, config);
-        }
-        // Определяем действие
-        let action = 'keep';
-        if (isStale) {
-            if (config.onStaleData === 'update') {
-                action = 'update';
-            }
-            else if (config.onStaleData === 'skip') {
-                action = 'skip';
-            }
-            else if (config.onStaleData === 'delete') {
-                action = 'delete';
-            }
-        }
+    const standUrl = config.standUrl || '';
+    if (!standUrl) {
+        console.warn(`⚠️  Stand URL не указан в конфигурации валидации`);
         return {
-            isValid: !isStale || action === 'update',
-            isStale,
-            changes,
-            updatedResponse: action === 'update' ? liveResponse.data : undefined,
-            action
+            isValid: true,
+            isStale: false,
+            changes: [],
+            action: 'keep'
         };
     }
-    catch (error) {
-        const errorCode = error.response?.status || 0;
-        const errorMessage = error.response?.statusText || error.message || 'Unknown error';
-        const responseData = error.response?.data;
-        console.error(`❌ Ошибка при валидации ${request.method} ${request.endpoint}: ${errorCode} ${errorMessage}`);
-        // НОВОЕ v14.1: Логирование ошибок в файлы
+    const fullUrl = standUrl + request.endpoint;
+    const retries = config.validationRetries || 1;
+    const isModifyingMethod = ['POST', 'PUT', 'PATCH'].includes(request.method);
+    console.log(`🔍 Валидация: ${request.method} ${fullUrl}${retries > 1 && isModifyingMethod ? ` (${retries} попыток)` : ''}`);
+    // НОВОЕ v14.5.4: Для POST/PUT/PATCH делаем несколько попыток если настроено
+    const actualRetries = isModifyingMethod ? retries : 1;
+    let lastResult = null;
+    let has4xxError = false;
+    let errorStatus = 0;
+    let errorData = null;
+    for (let attempt = 1; attempt <= actualRetries; attempt++) {
+        if (attempt > 1) {
+            // Небольшая задержка между попытками
+            await new Promise(resolve => setTimeout(resolve, 200));
+            console.log(`   Попытка ${attempt}/${actualRetries}...`);
+        }
+        lastResult = await executeApiRequest(axios, request.method, fullUrl, request.request_body, config.axiosConfig);
+        // Если получили 4xx - запоминаем и прекращаем
+        if (lastResult.status >= 400 && lastResult.status < 500) {
+            has4xxError = true;
+            errorStatus = lastResult.status;
+            errorData = lastResult.data;
+            console.log(`   ⚠️ Попытка ${attempt}: получен ${lastResult.status}`);
+            break;
+        }
+        // Если получили 5xx - это серверная ошибка
+        if (lastResult.status >= 500 || lastResult.error) {
+            console.error(`   ❌ Попытка ${attempt}: ошибка ${lastResult.status || 'сети'}`);
+            break;
+        }
+    }
+    // Обработка результата
+    if (!lastResult) {
+        console.warn(`⚠️  Неподдерживаемый метод: ${request.method}`);
+        return {
+            isValid: true,
+            isStale: false,
+            changes: [],
+            action: 'keep'
+        };
+    }
+    // НОВОЕ v14.5.4: Обработка 4xx как отдельных ошибок (не исключений)
+    if (has4xxError || (lastResult.status >= 400 && lastResult.status < 500)) {
+        const errorCode = has4xxError ? errorStatus : lastResult.status;
+        const responseData = has4xxError ? errorData : lastResult.data;
+        const errorMessage = `HTTP ${errorCode}`;
+        console.error(`❌ Валидация вернула ${errorCode} для ${request.method} ${request.endpoint}`);
         const isServerError = errorCode >= 500 && errorCode <= 599;
         const isClientError = errorCode >= 400 && errorCode <= 499;
-        // НОВОЕ v14.3: Отдельная обработка 422 ошибок
         const is422Error = errorCode === 422;
-        // НОВОЕ v14.4: Отдельная обработка 400 ошибок
         const is400Error = errorCode === 400;
-        if (isServerError) {
-            // 5xx ошибки - логируем в отдельный файл + отправляем email
-            await logValidationError(request, errorCode, errorMessage, responseData, config, true);
-            await sendServerErrorEmail(request, errorCode, errorMessage, responseData, config);
-        }
-        else if (isClientError && !is422Error && !is400Error) {
-            // 4xx ошибки (кроме 422 и 400) - логируем в файл клиентских ошибок
+        if (isClientError && !is422Error && !is400Error) {
             await logValidationError(request, errorCode, errorMessage, responseData, config, false);
         }
-        // 422 и 400 ошибки обрабатываются отдельно в validateRequests
-        // При ошибке API считаем данные устаревшими
         return {
             isValid: false,
             isStale: true,
@@ -305,14 +319,65 @@ async function validateRequest(request, config, axios) {
                     isSignificant: true
                 }],
             action: config.onStaleData === 'delete' ? 'delete' : 'skip',
-            // НОВОЕ v14.3: Маркируем 422 ошибки для сбора
             is422Error: is422Error,
-            // НОВОЕ v14.4: Маркируем 400 ошибки для сбора
             is400Error: is400Error,
             errorCode: errorCode,
             errorResponseData: (is422Error || is400Error) ? responseData : undefined
         };
     }
+    // 5xx или сетевые ошибки
+    if (lastResult.error || lastResult.status >= 500) {
+        const errorCode = lastResult.status || 0;
+        const errorMessage = lastResult.error?.message || `HTTP ${errorCode}`;
+        const responseData = lastResult.data;
+        console.error(`❌ Ошибка при валидации ${request.method} ${request.endpoint}: ${errorCode} ${errorMessage}`);
+        if (errorCode >= 500) {
+            await logValidationError(request, errorCode, errorMessage, responseData, config, true);
+            await sendServerErrorEmail(request, errorCode, errorMessage, responseData, config);
+        }
+        return {
+            isValid: false,
+            isStale: true,
+            changes: [{
+                    path: 'root',
+                    oldValue: request.response_body,
+                    newValue: null,
+                    isSignificant: true
+                }],
+            action: config.onStaleData === 'delete' ? 'delete' : 'skip'
+        };
+    }
+    // Успешный ответ (2xx/3xx)
+    const liveResponse = { data: lastResult.data };
+    // Сравниваем ответы
+    const changes = compareObjects(request.response_body, liveResponse.data, config);
+    // Проверяем есть ли значимые изменения
+    const significantChanges = changes.filter(c => c.isSignificant);
+    const isStale = significantChanges.length > 0;
+    // Логируем изменения
+    if (config.logChanges && changes.length > 0) {
+        await logChanges(request, changes, config);
+    }
+    // Определяем действие
+    let action = 'keep';
+    if (isStale) {
+        if (config.onStaleData === 'update') {
+            action = 'update';
+        }
+        else if (config.onStaleData === 'skip') {
+            action = 'skip';
+        }
+        else if (config.onStaleData === 'delete') {
+            action = 'delete';
+        }
+    }
+    return {
+        isValid: !isStale || action === 'update',
+        isStale,
+        changes,
+        updatedResponse: action === 'update' ? liveResponse.data : undefined,
+        action
+    };
 }
 /**
  * Логирует изменения данных в файл

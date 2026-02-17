@@ -436,6 +436,15 @@ export interface HappyPathTestConfig {
      * @default false
      */
     sendServerErrorEmail?: boolean;
+
+    /**
+     * НОВОЕ v14.5.4: Количество повторных вызовов endpoint для POST/PUT/PATCH
+     * Если хотя бы один вызов вернёт 400/422 - запрос считается невалидным
+     * Полезно когда API возвращает нестабильные ответы (иногда 201, иногда 400)
+     * @default 1 (без повторов)
+     * @example 3 - вызвать 3 раза, если хоть раз вернёт 400/422 - исключить из happy path
+     */
+    validationRetries?: number;
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -492,6 +501,40 @@ export interface HappyPathTestConfig {
    * Результат: { "code": "TEST_1707654321_ABC12" } (весь суффикс тоже в CAPS)
    */
   uniqueFieldsUpperCase?: string[];
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // НОВОЕ v14.5.4: УПРАВЛЕНИЕ СРАВНЕНИЕМ ПОЛЕЙ В RESPONSE
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * НОВОЕ v14.5.4: Поля которые ПОЛНОСТЬЮ пропускаются при сравнении response
+   * Эти поля не будут проверяться вообще (ни существование, ни значение)
+   *
+   * ЗАЧЕМ ЭТО НУЖНО:
+   * Некоторые поля меняются между генерацией теста и его выполнением:
+   * - id (создаётся новая запись с новым id)
+   * - count/total (количество записей изменилось)
+   * - created_at/updated_at (временные метки)
+   *
+   * @example ['id', 'count', 'total', 'created_at', 'updated_at']
+   * @default ['id', 'created_at', 'updated_at', 'createdAt', 'updatedAt']
+   */
+  skipCompareFields?: string[];
+
+  /**
+   * НОВОЕ v14.5.4: Поля где проверяется только СУЩЕСТВОВАНИЕ, но НЕ значение
+   * Тест проверит что поле есть в response, но не будет сравнивать значение
+   *
+   * ЗАЧЕМ ЭТО НУЖНО:
+   * Иногда важно что поле присутствует в ответе, но его значение может меняться:
+   * - token (каждый раз генерируется новый)
+   * - session_id (уникален для каждого запроса)
+   * - request_id (генерируется динамически)
+   *
+   * @example ['token', 'session_id', 'request_id']
+   * @default []
+   */
+  ignoreFieldValues?: string[];
 
   // ═══════════════════════════════════════════════════════════════════════════
   // НОВОЕ v14.3: ТЕСТЫ НА ВАЛИДАЦИЮ (422 ОШИБКИ)
@@ -996,6 +1039,9 @@ export class HappyPathTestGenerator {
       uniqueFields: ['name', 'code', 'title'],
       uniqueFieldsUpperCase: ['code'],
       enableUniqueFieldGeneration: true,
+      // НОВОЕ v14.5.4: Управление сравнением полей в response
+      skipCompareFields: ['id', 'created_at', 'updated_at', 'createdAt', 'updatedAt'],
+      ignoreFieldValues: [],
       ...config,
 
       // НОВОЕ v12.0: Дефолтные настройки дедупликации
@@ -1023,6 +1069,8 @@ export class HappyPathTestGenerator {
         clientErrorsLogPath: './validation-errors/4xx-client-errors.json',
         serverErrorsLogPath: './validation-errors/5xx-server-errors.json',
         sendServerErrorEmail: false,
+        // НОВОЕ v14.5.4: Количество повторных вызовов для POST/PUT/PATCH
+        validationRetries: 1,
         ...(config.dataValidation || {})
       },
 
@@ -1679,12 +1727,15 @@ ${tests.join('\n\n')}
     }
 
     // НОВОЕ v14.5: Генерируем файл с helper функциями (один раз на папку)
+    // НОВОЕ v14.5.4: Добавлены skipCompareFields и ignoreFieldValues
     const helpersFilePath = path.join(dataDir, 'test-helpers.ts');
     if (!fs.existsSync(helpersFilePath)) {
       const helpersConfig: TestHelpersConfig = {
         uniqueFields: this.config.uniqueFields,
         uniqueFieldsUpperCase: this.config.uniqueFieldsUpperCase,
-        packageName: this.config.packageName
+        packageName: this.config.packageName,
+        skipCompareFields: this.config.skipCompareFields,
+        ignoreFieldValues: this.config.ignoreFieldValues
       };
       const helpersCode = generateTestHelpersCode(helpersConfig);
       fs.writeFileSync(helpersFilePath, helpersCode, 'utf-8');
@@ -1939,8 +1990,13 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     if (useUniqueFields) {
       if (useSeparateDataFiles) {
         // Используем helper функции из test-helpers.ts
+        // ИСПРАВЛЕНИЕ v14.5.4: Проверяем только те уникальные поля, которые есть в response
         testCode += `      // Проверка уникальных полей (response должен вернуть то что отправили)
-      const { allMatch, mismatches } = verifyUniqueFields(response.data, modifiedUniqueFields);
+      // ВАЖНО: Проверяем только поля которые ЕСТЬ в response (некоторые endpoint возвращают только id)
+      const { allMatch, mismatches, skippedFields } = verifyUniqueFields(response.data, modifiedUniqueFields);
+      if (skippedFields.length > 0) {
+        console.log('ℹ️ Пропущены уникальные поля (отсутствуют в response):', skippedFields);
+      }
       if (!allMatch) {
         console.error('❌ Несовпадение уникальных полей:', mismatches);
       }
@@ -1951,13 +2007,25 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 `;
       } else {
         // Inline код когда нет отдельных файлов данных
+        // ИСПРАВЛЕНИЕ v14.5.4: Проверяем только те уникальные поля, которые есть в response
         testCode += `      // Проверка уникальных полей (response должен вернуть то что отправили)
+      // ВАЖНО: Проверяем только поля которые ЕСТЬ в response (некоторые endpoint возвращают только id)
       const uniqueFieldErrors: string[] = [];
+      const skippedUniqueFields: string[] = [];
       for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
-        const receivedValue = response.data?.[fieldName];
-        if (receivedValue !== sentValue) {
-          uniqueFieldErrors.push(\`Поле '\${fieldName}': отправлено '\${sentValue}', получено '\${receivedValue}'\`);
+        // ИСПРАВЛЕНИЕ v14.5.4: Проверяем только если поле СУЩЕСТВУЕТ в response
+        if (response.data && fieldName in response.data) {
+          const receivedValue = response.data[fieldName];
+          if (receivedValue !== sentValue) {
+            uniqueFieldErrors.push(\`Поле '\${fieldName}': отправлено '\${sentValue}', получено '\${receivedValue}'\`);
+          }
+        } else {
+          // Поле отсутствует в response - пропускаем (не считаем ошибкой)
+          skippedUniqueFields.push(fieldName);
         }
+      }
+      if (skippedUniqueFields.length > 0) {
+        console.log('ℹ️ Пропущены уникальные поля (отсутствуют в response):', skippedUniqueFields);
       }
       if (uniqueFieldErrors.length > 0) {
         console.error('❌ Несовпадение уникальных полей:', uniqueFieldErrors);

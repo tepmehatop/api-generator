@@ -28,6 +28,12 @@ export interface ValidationConfig {
     logChanges?: boolean;
     logPath?: string;
     /**
+     * Количество повторных вызовов endpoint для проверки стабильности ответа
+     * Если хотя бы один вызов вернёт 400/422 - запрос считается невалидным
+     * @default 1 (без повторов)
+     */
+    validationRetries?: number;
+    /**
      * Путь к JSON файлу для логирования 4xx ошибок (400, 404, 422 и т.д.)
      * @example './validation-errors/4xx-errors.json'
      */
@@ -174,6 +180,7 @@ export interface FieldChange {
 /**
  * Валидирует request - проверяет актуальность данных
  * Вызывает LIVE API и сравнивает с сохраненным response
+ * НОВОЕ v14.5.4: Поддержка validationRetries для POST/PUT/PATCH
  */
 export declare function validateRequest(request: TestRequest, config: ValidationConfig, axios: any): Promise<ValidationResult>;
 /**

@@ -388,6 +388,9 @@ class HappyPathTestGenerator {
             uniqueFields: ['name', 'code', 'title'],
             uniqueFieldsUpperCase: ['code'],
             enableUniqueFieldGeneration: true,
+            // НОВОЕ v14.5.4: Управление сравнением полей в response
+            skipCompareFields: ['id', 'created_at', 'updated_at', 'createdAt', 'updatedAt'],
+            ignoreFieldValues: [],
             ...config,
             // НОВОЕ v12.0: Дефолтные настройки дедупликации
             deduplication: {
@@ -413,6 +416,8 @@ class HappyPathTestGenerator {
                 clientErrorsLogPath: './validation-errors/4xx-client-errors.json',
                 serverErrorsLogPath: './validation-errors/5xx-server-errors.json',
                 sendServerErrorEmail: false,
+                // НОВОЕ v14.5.4: Количество повторных вызовов для POST/PUT/PATCH
+                validationRetries: 1,
                 ...(config.dataValidation || {})
             },
             // НОВОЕ v14.3: Дефолтные настройки генерации тестов на валидацию (422)
@@ -951,12 +956,15 @@ ${tests.join('\n\n')}
             fs.mkdirSync(dataDir, { recursive: true });
         }
         // НОВОЕ v14.5: Генерируем файл с helper функциями (один раз на папку)
+        // НОВОЕ v14.5.4: Добавлены skipCompareFields и ignoreFieldValues
         const helpersFilePath = path.join(dataDir, 'test-helpers.ts');
         if (!fs.existsSync(helpersFilePath)) {
             const helpersConfig = {
                 uniqueFields: this.config.uniqueFields,
                 uniqueFieldsUpperCase: this.config.uniqueFieldsUpperCase,
-                packageName: this.config.packageName
+                packageName: this.config.packageName,
+                skipCompareFields: this.config.skipCompareFields,
+                ignoreFieldValues: this.config.ignoreFieldValues
             };
             const helpersCode = (0, test_helpers_generator_1.generateTestHelpersCode)(helpersConfig);
             fs.writeFileSync(helpersFilePath, helpersCode, 'utf-8');
@@ -1189,8 +1197,13 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         if (useUniqueFields) {
             if (useSeparateDataFiles) {
                 // Используем helper функции из test-helpers.ts
+                // ИСПРАВЛЕНИЕ v14.5.4: Проверяем только те уникальные поля, которые есть в response
                 testCode += `      // Проверка уникальных полей (response должен вернуть то что отправили)
-      const { allMatch, mismatches } = verifyUniqueFields(response.data, modifiedUniqueFields);
+      // ВАЖНО: Проверяем только поля которые ЕСТЬ в response (некоторые endpoint возвращают только id)
+      const { allMatch, mismatches, skippedFields } = verifyUniqueFields(response.data, modifiedUniqueFields);
+      if (skippedFields.length > 0) {
+        console.log('ℹ️ Пропущены уникальные поля (отсутствуют в response):', skippedFields);
+      }
       if (!allMatch) {
         console.error('❌ Несовпадение уникальных полей:', mismatches);
       }
@@ -1202,13 +1215,25 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
             }
             else {
                 // Inline код когда нет отдельных файлов данных
+                // ИСПРАВЛЕНИЕ v14.5.4: Проверяем только те уникальные поля, которые есть в response
                 testCode += `      // Проверка уникальных полей (response должен вернуть то что отправили)
+      // ВАЖНО: Проверяем только поля которые ЕСТЬ в response (некоторые endpoint возвращают только id)
       const uniqueFieldErrors: string[] = [];
+      const skippedUniqueFields: string[] = [];
       for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
-        const receivedValue = response.data?.[fieldName];
-        if (receivedValue !== sentValue) {
-          uniqueFieldErrors.push(\`Поле '\${fieldName}': отправлено '\${sentValue}', получено '\${receivedValue}'\`);
+        // ИСПРАВЛЕНИЕ v14.5.4: Проверяем только если поле СУЩЕСТВУЕТ в response
+        if (response.data && fieldName in response.data) {
+          const receivedValue = response.data[fieldName];
+          if (receivedValue !== sentValue) {
+            uniqueFieldErrors.push(\`Поле '\${fieldName}': отправлено '\${sentValue}', получено '\${receivedValue}'\`);
+          }
+        } else {
+          // Поле отсутствует в response - пропускаем (не считаем ошибкой)
+          skippedUniqueFields.push(fieldName);
         }
+      }
+      if (skippedUniqueFields.length > 0) {
+        console.log('ℹ️ Пропущены уникальные поля (отсутствуют в response):', skippedUniqueFields);
       }
       if (uniqueFieldErrors.length > 0) {
         console.error('❌ Несовпадение уникальных полей:', uniqueFieldErrors);
