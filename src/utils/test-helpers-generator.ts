@@ -77,6 +77,28 @@ export function prepareUniqueFields<T>(
 }
 
 /**
+ * НОВОЕ v14.5.8: Обёртка для axios конфига - удаляет Content-Length
+ * Content-Length вызывает 502 ошибки на некоторых бекендах
+ *
+ * @param axiosConfig - оригинальный конфиг axios
+ * @returns конфиг с transformRequest который удаляет Content-Length
+ */
+export function getAxiosConfigWithoutContentLength(axiosConfig: any): any {
+  return {
+    ...axiosConfig,
+    transformRequest: [
+      (data: any, headers: any) => {
+        if (headers) {
+          delete headers['Content-Length'];
+          delete headers['content-length'];
+        }
+        return typeof data === 'string' ? data : JSON.stringify(data);
+      }
+    ]
+  };
+}
+
+/**
  * Генерирует CURL команду для копирования
  * ВАЖНО: Однострочная команда без лишних переносов, корректное экранирование body
  *
@@ -227,6 +249,22 @@ export function generateInlineHelpers(config: TestHelpersConfig): string {
 
 function generateUniqueSuffix(): string {
   return \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
+}
+
+// НОВОЕ v14.5.8: Удаляет Content-Length из axios запросов
+function getAxiosConfigWithoutContentLength(axiosConfig: any): any {
+  return {
+    ...axiosConfig,
+    transformRequest: [
+      (data: any, headers: any) => {
+        if (headers) {
+          delete headers['Content-Length'];
+          delete headers['content-length'];
+        }
+        return typeof data === 'string' ? data : JSON.stringify(data);
+      }
+    ]
+  };
 }
 
 function prepareUniqueFields<T>(requestData: T): { data: T; modifiedFields: Record<string, string> } {

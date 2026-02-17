@@ -1,6 +1,6 @@
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.5.7 - ИСПРАВЛЕНИЕ МАССИВОВ В REQUEST BODY
+ * ВЕРСИЯ 14.5.8 - УДАЛЕНИЕ CONTENT-LENGTH ИЗ AXIOS ЗАПРОСОВ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -41,6 +41,10 @@
  *     - Массив [324234] больше не превращается в объект {"0": 324234}
  *     - Корректная копия данных: Array.isArray проверка перед spread
  *     - prepareUniqueFields возвращает массив без изменений
+ * 21. ИСПРАВЛЕНИЕ v14.5.8: Удаление Content-Length из axios запросов
+ *     - Content-Length вызывает 502 ошибки на некоторых бекендах
+ *     - Добавлена функция getAxiosConfigWithoutContentLength
+ *     - transformRequest удаляет заголовок перед отправкой
  */
 import { Validation422Error, Duplicate400Error } from './utils/data-validation';
 export interface HappyPathTestConfig {

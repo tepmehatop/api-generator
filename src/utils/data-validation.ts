@@ -380,9 +380,20 @@ async function executeApiRequest(
 ): Promise<{ status: number; data: any; error?: any }> {
   try {
     // ВАЖНО: Создаём конфиг с validateStatus чтобы 4xx не бросали исключения
+    // ИСПРАВЛЕНИЕ v14.5.8: Удаляем Content-Length (вызывает 502 ошибки)
     const configWithValidation = {
       ...axiosConfig,
-      validateStatus: (status: number) => status < 500 // 4xx не считаем ошибкой
+      validateStatus: (status: number) => status < 500, // 4xx не считаем ошибкой
+      transformRequest: [
+        (data: any, headers: any) => {
+          // Удаляем Content-Length - axios добавляет его автоматически, но бекенд не принимает
+          if (headers) {
+            delete headers['Content-Length'];
+            delete headers['content-length'];
+          }
+          return typeof data === 'string' ? data : JSON.stringify(data);
+        }
+      ]
     };
 
     let response;

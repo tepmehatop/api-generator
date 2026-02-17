@@ -197,9 +197,20 @@ function compareObjects(oldObj, newObj, config, path = 'root') {
 async function executeApiRequest(axios, method, fullUrl, requestBody, axiosConfig) {
     try {
         // ВАЖНО: Создаём конфиг с validateStatus чтобы 4xx не бросали исключения
+        // ИСПРАВЛЕНИЕ v14.5.8: Удаляем Content-Length (вызывает 502 ошибки)
         const configWithValidation = {
             ...axiosConfig,
-            validateStatus: (status) => status < 500 // 4xx не считаем ошибкой
+            validateStatus: (status) => status < 500, // 4xx не считаем ошибкой
+            transformRequest: [
+                (data, headers) => {
+                    // Удаляем Content-Length - axios добавляет его автоматически, но бекенд не принимает
+                    if (headers) {
+                        delete headers['Content-Length'];
+                        delete headers['content-length'];
+                    }
+                    return typeof data === 'string' ? data : JSON.stringify(data);
+                }
+            ]
         };
         let response;
         if (method === 'GET') {

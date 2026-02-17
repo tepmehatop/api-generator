@@ -1,7 +1,7 @@
 "use strict";
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.5.7 - ИСПРАВЛЕНИЕ МАССИВОВ В REQUEST BODY
+ * ВЕРСИЯ 14.5.8 - УДАЛЕНИЕ CONTENT-LENGTH ИЗ AXIOS ЗАПРОСОВ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -42,6 +42,10 @@
  *     - Массив [324234] больше не превращается в объект {"0": 324234}
  *     - Корректная копия данных: Array.isArray проверка перед spread
  *     - prepareUniqueFields возвращает массив без изменений
+ * 21. ИСПРАВЛЕНИЕ v14.5.8: Удаление Content-Length из axios запросов
+ *     - Content-Length вызывает 502 ошибки на некоторых бекендах
+ *     - Добавлена функция getAxiosConfigWithoutContentLength
+ *     - transformRequest удаляет заголовок перед отправкой
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -925,7 +929,8 @@ class HappyPathTestGenerator {
         if (this.config.createSeparateDataFiles) {
             const fileName = this.endpointToFileName(endpoint, method);
             // НОВОЕ v14.5: Импорт helper функций (включая formatDifferencesAsBlocks)
-            imports.push(`import { prepareUniqueFields, buildCurlCommand, compareWithoutUniqueFields, verifyUniqueFields, formatDifferencesAsBlocks } from './test-data/test-helpers';`);
+            // НОВОЕ v14.5.8: Добавлен getAxiosConfigWithoutContentLength
+            imports.push(`import { prepareUniqueFields, buildCurlCommand, compareWithoutUniqueFields, verifyUniqueFields, formatDifferencesAsBlocks, getAxiosConfigWithoutContentLength } from './test-data/test-helpers';`);
             for (let i = 0; i < requests.length; i++) {
                 imports.push(`import { requestData as requestData${i + 1}, normalizedExpectedResponse as normalizedExpectedResponse${i + 1} } from './test-data/${fileName}-data-${i + 1}';`);
             }
@@ -1137,12 +1142,13 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 
     try {
 `;
+        // ИСПРАВЛЕНИЕ v14.5.8: Используем getAxiosConfigWithoutContentLength для удаления Content-Length
         if (hasBody) {
-            testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
+            testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, getAxiosConfigWithoutContentLength(${axiosConfig}));
 `;
         }
         else {
-            testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
+            testCode += `      response = await axios.${method.toLowerCase()}(${standUrlVar} + actualEndpoint, getAxiosConfigWithoutContentLength(${axiosConfig}));
 `;
         }
         // НОВОЕ v14.1: Используем handleApiError для обработки ошибок (email логика внутри)
@@ -1543,7 +1549,24 @@ import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
             }
             code += `} from './${relativeDataPath.startsWith('.') ? relativeDataPath : './' + relativeDataPath}';\n`;
         }
+        // НОВОЕ v14.5.8: Функция для удаления Content-Length
         code += `
+// ИСПРАВЛЕНИЕ v14.5.8: Удаляет Content-Length из axios запросов (вызывает 502 на некоторых бекендах)
+function getAxiosConfigWithoutContentLength(axiosConfig: any): any {
+  return {
+    ...axiosConfig,
+    transformRequest: [
+      (data: any, headers: any) => {
+        if (headers) {
+          delete headers['Content-Length'];
+          delete headers['content-length'];
+        }
+        return typeof data === 'string' ? data : JSON.stringify(data);
+      }
+    ]
+  };
+}
+
 const httpMethod = '${method}';
 
 test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
@@ -1608,12 +1631,13 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
 
     try {
 `;
+        // ИСПРАВЛЕНИЕ v14.5.8: Используем getAxiosConfigWithoutContentLength для удаления Content-Length
         if (hasBody) {
-            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, getAxiosConfigWithoutContentLength(${axiosConfig}));
 `;
         }
         else {
-            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, getAxiosConfigWithoutContentLength(${axiosConfig}));
 `;
         }
         testCode += `    } catch (error: any) {
@@ -1864,7 +1888,24 @@ import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
             }
             code += `} from './${relativeDataPath.startsWith('.') ? relativeDataPath : './' + relativeDataPath}';\n`;
         }
+        // НОВОЕ v14.5.8: Функция для удаления Content-Length
         code += `
+// ИСПРАВЛЕНИЕ v14.5.8: Удаляет Content-Length из axios запросов (вызывает 502 на некоторых бекендах)
+function getAxiosConfigWithoutContentLength(axiosConfig: any): any {
+  return {
+    ...axiosConfig,
+    transformRequest: [
+      (data: any, headers: any) => {
+        if (headers) {
+          delete headers['Content-Length'];
+          delete headers['content-length'];
+        }
+        return typeof data === 'string' ? data : JSON.stringify(data);
+      }
+    ]
+  };
+}
+
 const httpMethod = '${method}';
 
 test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
@@ -1932,12 +1973,13 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
 
     try {
 `;
+        // ИСПРАВЛЕНИЕ v14.5.8: Используем getAxiosConfigWithoutContentLength для удаления Content-Length
         if (hasBody) {
-            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, getAxiosConfigWithoutContentLength(${axiosConfig}));
 `;
         }
         else {
-            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
+            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, getAxiosConfigWithoutContentLength(${axiosConfig}));
 `;
         }
         testCode += `    } catch (error: any) {
