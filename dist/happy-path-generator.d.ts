@@ -1,6 +1,6 @@
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.5.6 - PATTERN MATCHING ДЛЯ excludeEndpoints
+ * ВЕРСИЯ 14.5.7 - ИСПРАВЛЕНИЕ МАССИВОВ В REQUEST BODY
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -37,6 +37,10 @@
  *     - Поддержка wildcard (*) в любом месте пути
  *     - Поддержка path параметров типа {id}, {param}
  *     - Комбинация нескольких паттернов в одном пути
+ * 20. ИСПРАВЛЕНИЕ v14.5.7: Массивы в request body
+ *     - Массив [324234] больше не превращается в объект {"0": 324234}
+ *     - Корректная копия данных: Array.isArray проверка перед spread
+ *     - prepareUniqueFields возвращает массив без изменений
  */
 import { Validation422Error, Duplicate400Error } from './utils/data-validation';
 export interface HappyPathTestConfig {

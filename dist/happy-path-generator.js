@@ -1,7 +1,7 @@
 "use strict";
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.5.6 - PATTERN MATCHING ДЛЯ excludeEndpoints
+ * ВЕРСИЯ 14.5.7 - ИСПРАВЛЕНИЕ МАССИВОВ В REQUEST BODY
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -38,6 +38,10 @@
  *     - Поддержка wildcard (*) в любом месте пути
  *     - Поддержка path параметров типа {id}, {param}
  *     - Комбинация нескольких паттернов в одном пути
+ * 20. ИСПРАВЛЕНИЕ v14.5.7: Массивы в request body
+ *     - Массив [324234] больше не превращается в объект {"0": 324234}
+ *     - Корректная копия данных: Array.isArray проверка перед spread
+ *     - prepareUniqueFields возвращает массив без изменений
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -1048,8 +1052,8 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         // Данные
         if (this.config.createSeparateDataFiles) {
             if (hasBody) {
-                // ИСПРАВЛЕНИЕ v14.5: Используем spread чтобы создать копию объекта (не const)
-                testCode += `    let requestData = { ...requestData${testNumber} };
+                // ИСПРАВЛЕНИЕ v14.5.7: Корректная копия для массивов и объектов
+                testCode += `    let requestData = Array.isArray(requestData${testNumber}) ? [...requestData${testNumber}] : { ...requestData${testNumber} };
 `;
             }
             // ИСПРАВЛЕНИЕ 9: Только переменная, не объект целиком
@@ -1569,7 +1573,8 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
         // Данные запроса
         if (useDataFiles) {
             if (hasBody) {
-                testCode += `    const requestData = { ...requestData${testNumber} }; // Копия для модификации
+                // ИСПРАВЛЕНИЕ v14.5.7: Корректная копия для массивов и объектов
+                testCode += `    const requestData = Array.isArray(requestData${testNumber}) ? [...requestData${testNumber}] : { ...requestData${testNumber} };
 `;
             }
             testCode += `    const expectedErrorData = expectedError${testNumber};
@@ -1892,7 +1897,8 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
         // Данные запроса
         if (useDataFiles) {
             if (hasBody) {
-                testCode += `    const requestData = { ...requestData${testNumber} }; // Оригинальные данные (вызовут 400)
+                // ИСПРАВЛЕНИЕ v14.5.7: Корректная копия для массивов и объектов
+                testCode += `    const requestData = Array.isArray(requestData${testNumber}) ? [...requestData${testNumber}] : { ...requestData${testNumber} };
 `;
             }
             testCode += `    const expectedErrorData = expectedError${testNumber};

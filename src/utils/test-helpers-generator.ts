@@ -48,10 +48,14 @@ export function generateUniqueSuffix(): string {
  * @param requestData - исходные данные запроса
  * @returns { data, modifiedFields } - модифицированные данные и map изменённых полей
  */
-export function prepareUniqueFields<T extends Record<string, any>>(
+export function prepareUniqueFields<T>(
   requestData: T
 ): { data: T; modifiedFields: Record<string, string> } {
-  const data = { ...requestData };
+  // ИСПРАВЛЕНИЕ v14.5.7: Если массив - возвращаем как есть (нет именованных полей для модификации)
+  if (Array.isArray(requestData)) {
+    return { data: requestData, modifiedFields: {} };
+  }
+  const data = { ...requestData } as Record<string, any>;
   const modifiedFields: Record<string, string> = {};
   const uniqueSuffix = generateUniqueSuffix();
 
@@ -225,8 +229,12 @@ function generateUniqueSuffix(): string {
   return \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
 }
 
-function prepareUniqueFields<T extends Record<string, any>>(requestData: T): { data: T; modifiedFields: Record<string, string> } {
-  const data = { ...requestData };
+function prepareUniqueFields<T>(requestData: T): { data: T; modifiedFields: Record<string, string> } {
+  // ИСПРАВЛЕНИЕ v14.5.7: Если массив - возвращаем как есть
+  if (Array.isArray(requestData)) {
+    return { data: requestData, modifiedFields: {} };
+  }
+  const data = { ...requestData } as Record<string, any>;
   const modifiedFields: Record<string, string> = {};
   const uniqueSuffix = generateUniqueSuffix();
   const uniqueFields = ${JSON.stringify(config.uniqueFields)};
