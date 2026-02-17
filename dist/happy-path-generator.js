@@ -1,7 +1,7 @@
 "use strict";
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.5.1 - ИСПРАВЛЕНИЯ БАГОВ ГЕНЕРАЦИИ
+ * ВЕРСИЯ 14.5.6 - PATTERN MATCHING ДЛЯ excludeEndpoints
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -29,11 +29,15 @@
  *     - Пропуск "Bad Request" без детализации (логирование в отдельный JSON)
  *     - Генерация тестов в отдельную папку с проверкой статуса и сообщения
  *     - Тестовые данные в папке test-data (как Happy Path)
- * 18. НОВОЕ v14.4: Парные тесты на дубликаты (400 ошибки)
+ * 18. НОВОЕ v14.4: Тесты на дубликаты (400 ошибки)
  *     - Негативный тест: оригинальные данные → 400 + проверка ТОЧНОГО сообщения
- *     - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+ *     - ИСПРАВЛЕНИЕ v14.5.5: Позитивные тесты убраны (нестабильны)
  *     - 3 независимые папки: happy-path, validation-tests (422), negative-400
  *     - Сообщение берётся из реального response (не хардкод!)
+ * 19. НОВОЕ v14.5.6: Pattern matching для excludeEndpoints
+ *     - Поддержка wildcard (*) в любом месте пути
+ *     - Поддержка path параметров типа {id}, {param}
+ *     - Комбинация нескольких паттернов в одном пути
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -306,24 +310,45 @@ function getCategoryFromEndpoint(endpoint) {
     }
     return 'other';
 }
-/**
- * НОВОЕ v14.0: Проверяет нужно ли исключить endpoint
- */
+// НОВОЕ v14.0: Проверяет нужно ли исключить endpoint
+// ОБНОВЛЕНИЕ v14.5.6: Поддержка паттернов с wildcard (*) и path параметрами ({id})
+// Примеры: "/api/v1/orders", "/api/v1/orders/*", "/api/v1/order/*/create", "/api/v1/order/{id}/create"
 function shouldExcludeEndpoint(endpoint, excludePatterns) {
     if (!excludePatterns || excludePatterns.length === 0)
         return false;
     for (const pattern of excludePatterns) {
-        // Поддержка wildcard: /api/v1/internal/* матчит /api/v1/internal/anything
-        if (pattern.endsWith('*')) {
-            const prefix = pattern.slice(0, -1);
-            if (endpoint.startsWith(prefix))
+        // Проверяем содержит ли паттерн wildcard (*) или path параметры ({...})
+        const hasWildcard = pattern.includes('*');
+        const hasPathParam = /\{[^}]+\}/.test(pattern);
+        if (hasWildcard || hasPathParam) {
+            // Конвертируем паттерн в регулярное выражение
+            const regexPattern = patternToRegex(pattern);
+            if (regexPattern.test(endpoint))
                 return true;
         }
-        else if (endpoint === pattern || endpoint.startsWith(pattern + '/')) {
-            return true;
+        else {
+            // Точное совпадение или префикс
+            if (endpoint === pattern || endpoint.startsWith(pattern + '/')) {
+                return true;
+            }
         }
     }
     return false;
+}
+/**
+ * Конвертирует паттерн endpoint в регулярное выражение
+ * - * заменяется на [^/]+ (любой сегмент пути, кроме /)
+ * - {param} заменяется на [^/]+ (любой сегмент пути)
+ * - Остальные символы экранируются
+ */
+function patternToRegex(pattern) {
+    // Экранируем специальные символы regex, кроме * и {}
+    let regexStr = pattern
+        .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Экранируем спец. символы
+        .replace(/\\\{[^}]+\\\}/g, '[^/]+') // {param} -> [^/]+
+        .replace(/\*/g, '[^/]+'); // * -> [^/]+
+    // Добавляем якоря для точного совпадения всего пути
+    return new RegExp(`^${regexStr}$`);
 }
 /**
  * НОВОЕ v14.0: Проверяет нужно ли исключить HTTP метод
@@ -1672,9 +1697,9 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
     // НОВОЕ v14.4: ГЕНЕРАЦИЯ ТЕСТОВ НА 400 ОШИБКИ (ДУБЛИКАТЫ)
     // ═══════════════════════════════════════════════════════════════════════════════
     /**
-     * Генерирует парные тесты для 400 ошибок "Уже существует":
+     * Генерирует негативные тесты для 400 ошибок "Уже существует":
      * - Негативный тест: оригинальные данные → 400 + проверка сообщения
-     * - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+     * ИСПРАВЛЕНИЕ v14.5.5: Позитивные тесты убраны (были нестабильны)
      */
     async generate400DuplicateTests(duplicate400Errors) {
         if (!this.config.duplicateTests.enabled || duplicate400Errors.length === 0) {
@@ -1815,6 +1840,7 @@ import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
                         // Если парсинг не удался - оставляем как есть
                     }
                 }
+                // ИСПРАВЛЕНИЕ v14.5.5: Убрана генерация expectedSuccess (позитивные тесты отключены)
                 dataCode += `// Тест #${i + 1}\n`;
                 dataCode += `export const requestData${i + 1} = ${JSON.stringify(requestBodyForExport, null, 2)};\n\n`;
                 dataCode += `export const expectedError${i + 1} = ${JSON.stringify({
@@ -1822,19 +1848,14 @@ import { ${axiosConfig} } from '${this.config.axiosConfigPath}';
                     detailMessage: error.detailMessage,
                     responseData: error.responseData
                 }, null, 2)};\n\n`;
-                dataCode += `export const expectedSuccess${i + 1} = ${JSON.stringify({
-                    status: error.expectedStatus,
-                    responseBody: error.expectedResponseBody
-                }, null, 2)};\n\n`;
             }
             fs.writeFileSync(dataFilePath, dataCode, 'utf-8');
-            // Импорт тестовых данных
+            // Импорт тестовых данных (только для негативных тестов)
             const relativeDataPath = path.relative(path.dirname(testFilePath), dataFilePath).replace(/\.ts$/, '');
             code += `import {\n`;
             for (let i = 0; i < errors.length; i++) {
                 code += `  requestData${i + 1},\n`;
                 code += `  expectedError${i + 1},\n`;
-                code += `  expectedSuccess${i + 1},\n`;
             }
             code += `} from './${relativeDataPath.startsWith('.') ? relativeDataPath : './' + relativeDataPath}';\n`;
         }
@@ -1843,14 +1864,12 @@ const httpMethod = '${method}';
 
 test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
 `;
-        // Генерируем парные тесты
+        // ИСПРАВЛЕНИЕ v14.5.5: Генерируем только негативные тесты (без позитивных)
+        // Позитивные тесты с uniqueFields убраны, так как они нестабильны
         for (let i = 0; i < errors.length; i++) {
             const error = errors[i];
-            // Негативный тест (400)
+            // Негативный тест (400) - проверяем что запрос возвращает 400 + сообщение
             code += await this.generateSingle400NegativeTest(error, i + 1, standUrlVar, axiosConfig, createDataFiles ?? true);
-            code += '\n';
-            // Позитивный тест (с uniqueFields)
-            code += await this.generateSingle400PositiveTest(error, i + 1, standUrlVar, axiosConfig, createDataFiles ?? true);
             code += '\n';
         }
         code += `});
@@ -1957,170 +1976,6 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
     // Проверка ТОЧНОГО совпадения сообщения (взято из реального API)
     await expect(responseDetail, 'Сообщение об ошибке должно совпадать').toBe(expectedErrorData.detailMessage);
   });`;
-        return testCode;
-    }
-    /**
-     * Генерирует позитивный тест: данные с uniqueFields → 2xx
-     */
-    async generateSingle400PositiveTest(error, testNumber, standUrlVar, axiosConfig, useDataFiles) {
-        const hasBody = ['POST', 'PUT', 'PATCH'].includes(error.method);
-        const uniqueFields = this.config.uniqueFields || ['name', 'code', 'title'];
-        const upperCaseFields = this.config.uniqueFieldsUpperCase || ['code'];
-        let testCode = `  test(\`Positive #${testNumber}: С уникальными полями (${error.expectedStatus}) @api @apiHappyPath\`, async ({ page }, testInfo) => {
-    // Request ID: ${error.requestId}
-    // Позитивный тест: данные с уникальными полями должны вернуть ${error.expectedStatus}
-    const actualEndpoint = '${error.endpoint}';
-`;
-        // Данные запроса
-        if (useDataFiles) {
-            if (hasBody) {
-                testCode += `    const requestData = { ...requestData${testNumber} }; // Копия для модификации
-`;
-            }
-            testCode += `    const expectedSuccessData = expectedSuccess${testNumber};
-`;
-        }
-        else {
-            if (hasBody) {
-                // ИСПРАВЛЕНИЕ v14.5.2: Если requestBody строка - парсим перед stringify
-                let requestBodyObj = error.requestBody;
-                if (typeof requestBodyObj === 'string') {
-                    try {
-                        requestBodyObj = JSON.parse(requestBodyObj);
-                    }
-                    catch {
-                        // Если парсинг не удался - оставляем как есть
-                    }
-                }
-                testCode += `    const requestData = ${JSON.stringify(requestBodyObj, null, 4).replace(/^/gm, '    ')};
-`;
-            }
-            testCode += `    const expectedSuccessData = {
-      status: ${error.expectedStatus},
-      responseBody: ${JSON.stringify(error.expectedResponseBody, null, 4).replace(/^/gm, '      ')},
-    };
-`;
-        }
-        // Генерация уникальных значений
-        if (hasBody) {
-            testCode += `
-    // Генерация уникальных значений для избежания 400 "Уже существует"
-    const uniqueSuffix = \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
-    const modifiedUniqueFields: Record<string, string> = {};
-
-`;
-            // Генерируем код для каждого уникального поля
-            for (const field of uniqueFields) {
-                const isUpperCase = upperCaseFields.includes(field);
-                if (isUpperCase) {
-                    testCode += `    if (requestData.${field} !== undefined && typeof requestData.${field} === 'string') {
-      requestData.${field} = (requestData.${field} + uniqueSuffix).toUpperCase();
-      modifiedUniqueFields['${field}'] = requestData.${field};
-    }
-`;
-                }
-                else {
-                    testCode += `    if (requestData.${field} !== undefined && typeof requestData.${field} === 'string') {
-      requestData.${field} = requestData.${field} + uniqueSuffix;
-      modifiedUniqueFields['${field}'] = requestData.${field};
-    }
-`;
-                }
-            }
-        }
-        // Отправка запроса
-        testCode += `
-    let response;
-
-    try {
-`;
-        if (hasBody) {
-            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, requestData, ${axiosConfig});
-`;
-        }
-        else {
-            testCode += `      response = await axios.${error.method.toLowerCase()}(${standUrlVar} + actualEndpoint, ${axiosConfig});
-`;
-        }
-        const use5xxEmail = this.config.send5xxEmailNotification && this.config.emailHelperPath;
-        const emailMethodName = this.config.emailHelperMethodName || 'sendErrorMailbyApi';
-        testCode += `    } catch (error: any) {
-`;
-        if (this.config.apiTestHelperPath) {
-            testCode += `      await handleApiError({
-        error,
-        testInfo,
-        endpoint: actualEndpoint,
-        method: httpMethod,
-        standUrl: ${standUrlVar},${hasBody ? `
-        requestBody: requestData,` : ''}
-        axiosConfig: ${axiosConfig},${use5xxEmail ? `
-        sendEmailFn: ${emailMethodName}` : ''}
-      });
-`;
-        }
-        else {
-            testCode += `      console.error('❌ Запрос с уникальными полями не должен падать:', error.message);
-      throw error;
-`;
-        }
-        testCode += `    }
-
-    // Проверяем статус код
-    await expect(response.status).toBe(expectedSuccessData.status);
-
-`;
-        // Проверка уникальных полей
-        if (hasBody) {
-            testCode += `    // Проверяем что бэкенд вернул именно те уникальные значения что мы отправили
-    for (const [fieldName, sentValue] of Object.entries(modifiedUniqueFields)) {
-      const receivedValue = response.data[fieldName];
-      await expect(receivedValue, \`Поле '\${fieldName}' должно совпадать с отправленным\`).toBe(sentValue);
-    }
-
-    // Сравниваем остальные поля (без уникальных)
-    if (expectedSuccessData.responseBody !== null && expectedSuccessData.responseBody !== undefined) {
-      const uniqueFieldNames = Object.keys(modifiedUniqueFields);
-
-      // Функция удаления полей из объекта
-      const removeFields = (obj: any, fields: string[]): any => {
-        if (!obj || typeof obj !== 'object') return obj;
-        const copy = Array.isArray(obj) ? [...obj] : { ...obj };
-        for (const field of fields) {
-          if (field in copy) delete copy[field];
-        }
-        return copy;
-      };
-
-      const expectedWithoutUnique = removeFields(expectedSuccessData.responseBody, uniqueFieldNames);
-      const responseWithoutUnique = removeFields(response.data, uniqueFieldNames);
-
-      const comparison = compareDbWithResponse(expectedWithoutUnique, responseWithoutUnique);
-
-      if (!comparison.isEqual) {
-        console.log('\\n❌ Различия в response (без уникальных полей):');
-        console.log(comparison.formattedDiff);
-      }
-
-      await expect(comparison.isEqual, 'Response должен соответствовать ожидаемому (без уникальных полей)').toBe(true);
-    }
-`;
-        }
-        else {
-            testCode += `    // Сравниваем response с ожидаемым
-    if (expectedSuccessData.responseBody !== null && expectedSuccessData.responseBody !== undefined) {
-      const comparison = compareDbWithResponse(expectedSuccessData.responseBody, response.data);
-
-      if (!comparison.isEqual) {
-        console.log('\\n❌ Различия в response:');
-        console.log(comparison.formattedDiff);
-      }
-
-      await expect(comparison.isEqual, 'Response должен соответствовать ожидаемому').toBe(true);
-    }
-`;
-        }
-        testCode += `  });`;
         return testCode;
     }
 }

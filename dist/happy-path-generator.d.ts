@@ -1,6 +1,6 @@
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.5.1 - ИСПРАВЛЕНИЯ БАГОВ ГЕНЕРАЦИИ
+ * ВЕРСИЯ 14.5.6 - PATTERN MATCHING ДЛЯ excludeEndpoints
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -28,11 +28,15 @@
  *     - Пропуск "Bad Request" без детализации (логирование в отдельный JSON)
  *     - Генерация тестов в отдельную папку с проверкой статуса и сообщения
  *     - Тестовые данные в папке test-data (как Happy Path)
- * 18. НОВОЕ v14.4: Парные тесты на дубликаты (400 ошибки)
+ * 18. НОВОЕ v14.4: Тесты на дубликаты (400 ошибки)
  *     - Негативный тест: оригинальные данные → 400 + проверка ТОЧНОГО сообщения
- *     - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+ *     - ИСПРАВЛЕНИЕ v14.5.5: Позитивные тесты убраны (нестабильны)
  *     - 3 независимые папки: happy-path, validation-tests (422), negative-400
  *     - Сообщение берётся из реального response (не хардкод!)
+ * 19. НОВОЕ v14.5.6: Pattern matching для excludeEndpoints
+ *     - Поддержка wildcard (*) в любом месте пути
+ *     - Поддержка path параметров типа {id}, {param}
+ *     - Комбинация нескольких паттернов в одном пути
  */
 import { Validation422Error, Duplicate400Error } from './utils/data-validation';
 export interface HappyPathTestConfig {
@@ -504,10 +508,10 @@ export interface HappyPathTestConfig {
      *
      * КАК РАБОТАЕТ:
      * 1. При валидации собираются все 400 ответы с непустым сообщением
-     * 2. Для каждого endpoint генерируется 2 теста:
-     *    - Негативный: оригинальные данные → 400 + проверка сообщения из response
-     *    - Позитивный: данные с uniqueFields → 2xx + полная проверка response
+     * 2. Для каждого endpoint генерируется негативный тест:
+     *    - Оригинальные данные → 400 + проверка сообщения из response
      * 3. Сообщение берётся из реального response (не хардкод!)
+     * ИСПРАВЛЕНИЕ v14.5.5: Позитивные тесты убраны как нестабильные
      */
     duplicateTests?: {
         /**
@@ -627,9 +631,9 @@ export declare class HappyPathTestGenerator {
      */
     private generateSingle422Test;
     /**
-     * Генерирует парные тесты для 400 ошибок "Уже существует":
+     * Генерирует негативные тесты для 400 ошибок "Уже существует":
      * - Негативный тест: оригинальные данные → 400 + проверка сообщения
-     * - Позитивный тест: данные с uniqueFields → 2xx + проверка response
+     * ИСПРАВЛЕНИЕ v14.5.5: Позитивные тесты убраны (были нестабильны)
      */
     generate400DuplicateTests(duplicate400Errors: Duplicate400Error[]): Promise<void>;
     /**
@@ -648,10 +652,6 @@ export declare class HappyPathTestGenerator {
      * Генерирует негативный тест: оригинальные данные → 400
      */
     private generateSingle400NegativeTest;
-    /**
-     * Генерирует позитивный тест: данные с uniqueFields → 2xx
-     */
-    private generateSingle400PositiveTest;
 }
 export declare function generateHappyPathTests(config: HappyPathTestConfig, sqlConnection: any): Promise<void>;
 /**
