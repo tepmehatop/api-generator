@@ -1,7 +1,7 @@
 "use strict";
 /**
  * Генератор Happy Path API тестов
- * ВЕРСИЯ 14.5.8 - УДАЛЕНИЕ CONTENT-LENGTH ИЗ AXIOS ЗАПРОСОВ
+ * ВЕРСИЯ 14.5.9 - УМНАЯ ГЕНЕРАЦИЯ + УЛУЧШЕННОЕ СРАВНЕНИЕ
  *
  * ИСПРАВЛЕНИЯ:
  * 1. Конфигурируемый импорт test/expect (testImportPath)
@@ -46,6 +46,12 @@
  *     - Content-Length вызывает 502 ошибки на некоторых бекендах
  *     - Добавлена функция getAxiosConfigWithoutContentLength
  *     - transformRequest удаляет заголовок перед отправкой
+ * 22. НОВОЕ v14.5.9: Умная генерация уникальных полей + улучшенное сравнение
+ *     - Полная замена значения (AUTOCODE → XKZPQWNM), НЕ суффикс
+ *     - Сохранение формата: uppercase, lowercase, разделители
+ *     - ignoreFieldValues теперь поддерживает вложенные пути (meta.count)
+ *     - Улучшенное сравнение массивов объектов по похожести
+ *     - Умное сопоставление элементов при разном порядке
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;

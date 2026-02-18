@@ -35,15 +35,143 @@ import { compareDbWithResponse, formatDifferencesAsBlocks } from '${config.packa
 export { formatDifferencesAsBlocks };
 
 /**
- * Генерирует уникальный суффикс для избежания 400 "Уже существует"
+ * НОВОЕ v14.5.9: Анализирует формат оригинального значения
  */
-export function generateUniqueSuffix(): string {
-  return \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
+function analyzeValueFormat(value: string): {
+  isUppercase: boolean;
+  isLowercase: boolean;
+  hasDigits: boolean;
+  hasLetters: boolean;
+  segments: { type: 'letters' | 'digits' | 'delimiter'; value: string; isUpper: boolean }[];
+  length: number;
+} {
+  const segments: { type: 'letters' | 'digits' | 'delimiter'; value: string; isUpper: boolean }[] = [];
+  let currentSegment = '';
+  let currentType: 'letters' | 'digits' | 'delimiter' | null = null;
+
+  for (const char of value) {
+    const isLetter = /[a-zA-Z]/.test(char);
+    const isDigit = /[0-9]/.test(char);
+    let charType: 'letters' | 'digits' | 'delimiter';
+    if (isLetter) charType = 'letters';
+    else if (isDigit) charType = 'digits';
+    else charType = 'delimiter';
+
+    if (currentType !== charType) {
+      if (currentSegment) {
+        segments.push({
+          type: currentType!,
+          value: currentSegment,
+          isUpper: currentType === 'letters' ? currentSegment === currentSegment.toUpperCase() : false
+        });
+      }
+      currentSegment = char;
+      currentType = charType;
+    } else {
+      currentSegment += char;
+    }
+  }
+  if (currentSegment) {
+    segments.push({
+      type: currentType!,
+      value: currentSegment,
+      isUpper: currentType === 'letters' ? currentSegment === currentSegment.toUpperCase() : false
+    });
+  }
+
+  const letters = value.replace(/[^a-zA-Z]/g, '');
+  return {
+    isUppercase: letters.length > 0 && letters === letters.toUpperCase(),
+    isLowercase: letters.length > 0 && letters === letters.toLowerCase(),
+    hasDigits: /[0-9]/.test(value),
+    hasLetters: letters.length > 0,
+    segments,
+    length: value.length
+  };
+}
+
+/**
+ * НОВОЕ v14.5.9: Генерирует случайную строку заданного типа
+ */
+function generateRandomString(length: number, type: 'uppercase' | 'lowercase' | 'mixed' | 'digits'): string {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghjklmnpqrstuvwxyz';
+  const digits = '0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    switch (type) {
+      case 'uppercase':
+        result += upper[Math.floor(Math.random() * upper.length)];
+        break;
+      case 'lowercase':
+        result += lower[Math.floor(Math.random() * lower.length)];
+        break;
+      case 'mixed':
+        result += Math.random() > 0.5 ? upper[Math.floor(Math.random() * upper.length)] : lower[Math.floor(Math.random() * lower.length)];
+        break;
+      case 'digits':
+        result += digits[Math.floor(Math.random() * digits.length)];
+        break;
+    }
+  }
+  return result;
+}
+
+/**
+ * НОВОЕ v14.5.9: Генерирует ПОЛНОСТЬЮ НОВОЕ уникальное значение
+ * НЕ добавляет суффикс, а ПОЛНОСТЬЮ заменяет значение, сохраняя формат
+ *
+ * AUTOCODE → XKZPQWNM (не AUTOCODE_suffix)
+ */
+function generateSmartUniqueValue(originalValue: string, forceUpperCase: boolean = false): string {
+  if (!originalValue || originalValue.trim() === '') {
+    return generateRandomString(8, 'uppercase');
+  }
+
+  const format = analyzeValueFormat(originalValue);
+
+  // Если форсируем uppercase
+  if (forceUpperCase) {
+    // Генерируем посегментно, сохраняя разделители
+    if (format.segments.length > 1) {
+      return format.segments.map(segment => {
+        if (segment.type === 'delimiter') return segment.value;
+        if (segment.type === 'digits') return generateRandomString(segment.value.length, 'digits');
+        return generateRandomString(segment.value.length, 'uppercase');
+      }).join('');
+    }
+    return generateRandomString(format.length, 'uppercase');
+  }
+
+  // Автоопределение типа по оригиналу
+  if (format.segments.length > 1) {
+    // Есть разделители - генерируем посегментно
+    return format.segments.map(segment => {
+      if (segment.type === 'delimiter') return segment.value;
+      if (segment.type === 'digits') return generateRandomString(segment.value.length, 'digits');
+      const segmentType = segment.isUpper ? 'uppercase' : 'lowercase';
+      return generateRandomString(segment.value.length, segmentType);
+    }).join('');
+  }
+
+  // Простое значение без разделителей
+  let genType: 'uppercase' | 'lowercase' | 'mixed' | 'digits' = 'uppercase';
+  if (!format.hasLetters && format.hasDigits) {
+    genType = 'digits';
+  } else if (format.isUppercase) {
+    genType = 'uppercase';
+  } else if (format.isLowercase) {
+    genType = 'lowercase';
+  } else {
+    genType = 'mixed';
+  }
+
+  return generateRandomString(format.length, genType);
 }
 
 /**
  * Подготавливает request data с уникальными полями
- * Возвращает модифицированные данные и список изменённых полей
+ * ВЕРСИЯ v14.5.9: Полная замена значений (не суффикс!)
  *
  * @param requestData - исходные данные запроса
  * @returns { data, modifiedFields } - модифицированные данные и map изменённых полей
@@ -57,18 +185,15 @@ export function prepareUniqueFields<T>(
   }
   const data = { ...requestData } as Record<string, any>;
   const modifiedFields: Record<string, string> = {};
-  const uniqueSuffix = generateUniqueSuffix();
 
   const uniqueFields = ${JSON.stringify(config.uniqueFields)};
   const upperCaseFields = ${JSON.stringify(config.uniqueFieldsUpperCase)};
 
   for (const field of uniqueFields) {
     if (data[field] !== undefined && typeof data[field] === 'string') {
-      if (upperCaseFields.includes(field)) {
-        data[field] = (data[field] + uniqueSuffix).toUpperCase();
-      } else {
-        data[field] = data[field] + uniqueSuffix;
-      }
+      const forceUpper = upperCaseFields.includes(field);
+      // НОВОЕ v14.5.9: Полная замена значения, а не добавление суффикса
+      data[field] = generateSmartUniqueValue(data[field], forceUpper);
       modifiedFields[field] = data[field];
     }
   }
@@ -171,22 +296,46 @@ export function compareWithoutUniqueFields(
     return copy;
   };
 
-  // НОВОЕ v14.5.4: Функция замены значений ignoreFieldValues на placeholder
-  const normalizeIgnoredFields = (obj: any, fieldsToIgnore: string[]): any => {
+  // НОВОЕ v14.5.9: Функция проверки соответствия пути паттерну игнорируемого поля
+  // Поддерживает: "count", "meta.count", "root.meta.count"
+  const matchesIgnoredPath = (currentPath: string, ignoredField: string): boolean => {
+    // Убираем "root." если есть
+    const cleanPath = currentPath.replace(/^root\\./, '');
+    const cleanIgnored = ignoredField.replace(/^root\\./, '');
+
+    // Точное совпадение
+    if (cleanPath === cleanIgnored) return true;
+
+    // Проверяем совпадение окончания пути (для простых имён полей)
+    // Например: "meta.count" заканчивается на "count"
+    if (!cleanIgnored.includes('.') && cleanPath.endsWith('.' + cleanIgnored)) return true;
+    if (!cleanIgnored.includes('.') && cleanPath === cleanIgnored) return true;
+
+    // Проверяем вложенные пути: cleanPath="data.meta.count", cleanIgnored="meta.count"
+    if (cleanPath.endsWith(cleanIgnored)) return true;
+
+    return false;
+  };
+
+  // НОВОЕ v14.5.9: Функция замены значений ignoreFieldValues на placeholder
+  // ИСПРАВЛЕНО: Поддержка вложенных путей типа "meta.count"
+  const normalizeIgnoredFields = (obj: any, fieldsToIgnore: string[], currentPath: string = ''): any => {
     if (!obj || typeof obj !== 'object') return obj;
     if (Array.isArray(obj)) {
-      return obj.map(item => normalizeIgnoredFields(item, fieldsToIgnore));
+      return obj.map((item, index) => normalizeIgnoredFields(item, fieldsToIgnore, currentPath + '[' + index + ']'));
     }
     const copy = { ...obj };
-    for (const field of fieldsToIgnore) {
-      if (field in copy) {
-        copy[field] = '__IGNORED__'; // Заменяем на placeholder для сравнения структуры
-      }
-    }
-    // Рекурсивно обрабатываем вложенные объекты
     for (const key of Object.keys(copy)) {
-      if (copy[key] && typeof copy[key] === 'object') {
-        copy[key] = normalizeIgnoredFields(copy[key], fieldsToIgnore);
+      const fieldPath = currentPath ? currentPath + '.' + key : key;
+
+      // Проверяем, нужно ли игнорировать это поле
+      const shouldIgnore = fieldsToIgnore.some(ignored => matchesIgnoredPath(fieldPath, ignored));
+
+      if (shouldIgnore) {
+        copy[key] = '__IGNORED__'; // Заменяем на placeholder для сравнения структуры
+      } else if (copy[key] && typeof copy[key] === 'object') {
+        // Рекурсивно обрабатываем вложенные объекты
+        copy[key] = normalizeIgnoredFields(copy[key], fieldsToIgnore, fieldPath);
       }
     }
     return copy;
@@ -247,8 +396,58 @@ export function generateInlineHelpers(config: TestHelpersConfig): string {
   return `
 // === HELPER FUNCTIONS ===
 
-function generateUniqueSuffix(): string {
-  return \`_\${Date.now()}_\${Math.random().toString(36).substring(2, 7)}\`;
+// НОВОЕ v14.5.9: Генерирует случайную строку заданного типа
+function generateRandomString(length: number, type: 'uppercase' | 'lowercase' | 'mixed' | 'digits'): string {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghjklmnpqrstuvwxyz';
+  const digits = '0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    switch (type) {
+      case 'uppercase': result += upper[Math.floor(Math.random() * upper.length)]; break;
+      case 'lowercase': result += lower[Math.floor(Math.random() * lower.length)]; break;
+      case 'mixed': result += Math.random() > 0.5 ? upper[Math.floor(Math.random() * upper.length)] : lower[Math.floor(Math.random() * lower.length)]; break;
+      case 'digits': result += digits[Math.floor(Math.random() * digits.length)]; break;
+    }
+  }
+  return result;
+}
+
+// НОВОЕ v14.5.9: Генерирует ПОЛНОСТЬЮ НОВОЕ уникальное значение (не суффикс!)
+function generateSmartUniqueValue(originalValue: string, forceUpperCase: boolean = false): string {
+  if (!originalValue || originalValue.trim() === '') return generateRandomString(8, 'uppercase');
+
+  const segments: { type: 'letters' | 'digits' | 'delimiter'; value: string; isUpper: boolean }[] = [];
+  let currentSegment = '';
+  let currentType: 'letters' | 'digits' | 'delimiter' | null = null;
+
+  for (const char of originalValue) {
+    const isLetter = /[a-zA-Z]/.test(char);
+    const isDigit = /[0-9]/.test(char);
+    let charType: 'letters' | 'digits' | 'delimiter';
+    if (isLetter) charType = 'letters';
+    else if (isDigit) charType = 'digits';
+    else charType = 'delimiter';
+
+    if (currentType !== charType) {
+      if (currentSegment) {
+        segments.push({ type: currentType!, value: currentSegment, isUpper: currentType === 'letters' ? currentSegment === currentSegment.toUpperCase() : false });
+      }
+      currentSegment = char;
+      currentType = charType;
+    } else {
+      currentSegment += char;
+    }
+  }
+  if (currentSegment) segments.push({ type: currentType!, value: currentSegment, isUpper: currentType === 'letters' ? currentSegment === currentSegment.toUpperCase() : false });
+
+  // Генерируем посегментно, сохраняя структуру
+  return segments.map(segment => {
+    if (segment.type === 'delimiter') return segment.value;
+    if (segment.type === 'digits') return generateRandomString(segment.value.length, 'digits');
+    const segmentType = forceUpperCase || segment.isUpper ? 'uppercase' : 'lowercase';
+    return generateRandomString(segment.value.length, segmentType);
+  }).join('');
 }
 
 // НОВОЕ v14.5.8: Удаляет Content-Length из axios запросов
@@ -267,24 +466,18 @@ function getAxiosConfigWithoutContentLength(axiosConfig: any): any {
   };
 }
 
+// НОВОЕ v14.5.9: Полная замена уникальных полей (не суффикс!)
 function prepareUniqueFields<T>(requestData: T): { data: T; modifiedFields: Record<string, string> } {
-  // ИСПРАВЛЕНИЕ v14.5.7: Если массив - возвращаем как есть
-  if (Array.isArray(requestData)) {
-    return { data: requestData, modifiedFields: {} };
-  }
+  if (Array.isArray(requestData)) return { data: requestData, modifiedFields: {} };
   const data = { ...requestData } as Record<string, any>;
   const modifiedFields: Record<string, string> = {};
-  const uniqueSuffix = generateUniqueSuffix();
   const uniqueFields = ${JSON.stringify(config.uniqueFields)};
   const upperCaseFields = ${JSON.stringify(config.uniqueFieldsUpperCase)};
 
   for (const field of uniqueFields) {
     if (data[field] !== undefined && typeof data[field] === 'string') {
-      if (upperCaseFields.includes(field)) {
-        data[field] = (data[field] + uniqueSuffix).toUpperCase();
-      } else {
-        data[field] = data[field] + uniqueSuffix;
-      }
+      const forceUpper = upperCaseFields.includes(field);
+      data[field] = generateSmartUniqueValue(data[field], forceUpper);
       modifiedFields[field] = data[field];
     }
   }

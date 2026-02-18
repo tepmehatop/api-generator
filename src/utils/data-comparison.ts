@@ -337,12 +337,68 @@ export function convertDataTypes(data: any): any {
 }
 
 /**
+ * НОВОЕ v14.5.9: Вычисляет "похожесть" двух объектов (0-1)
+ * Используется для умного сопоставления элементов массива
+ */
+function calculateObjectSimilarity(obj1: any, obj2: any): number {
+  if (obj1 === obj2) return 1;
+  if (obj1 === null || obj2 === null) return obj1 === obj2 ? 1 : 0;
+  if (typeof obj1 !== 'object' || typeof obj2 !== 'object') {
+    return obj1 === obj2 ? 1 : 0;
+  }
+
+  const keys1 = Object.keys(obj1);
+  const keys2 = Object.keys(obj2);
+  const allKeys = new Set([...keys1, ...keys2]);
+
+  if (allKeys.size === 0) return 1;
+
+  let matches = 0;
+  for (const key of allKeys) {
+    if (key in obj1 && key in obj2) {
+      const val1 = obj1[key];
+      const val2 = obj2[key];
+
+      if (val1 === val2) {
+        matches++;
+      } else if (typeof val1 === 'object' && typeof val2 === 'object' && val1 !== null && val2 !== null) {
+        // Рекурсивно для вложенных объектов (но не слишком глубоко)
+        matches += calculateObjectSimilarity(val1, val2) * 0.8;
+      }
+    }
+  }
+
+  return matches / allKeys.size;
+}
+
+/**
+ * НОВОЕ v14.5.9: Находит лучшее соответствие для элемента в массиве
+ */
+function findBestMatch(item: any, candidates: any[], usedIndices: Set<number>): number {
+  let bestIndex = -1;
+  let bestSimilarity = -1;
+
+  for (let i = 0; i < candidates.length; i++) {
+    if (usedIndices.has(i)) continue;
+
+    const similarity = calculateObjectSimilarity(item, candidates[i]);
+    if (similarity > bestSimilarity) {
+      bestSimilarity = similarity;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+}
+
+/**
  * Глубокое сравнение объектов с игнорированием порядка в массивах
  *
- * ВЕРСИЯ 14.1: Исправлено сравнение массивов объектов
+ * ВЕРСИЯ 14.5.9: Улучшенное сравнение массивов объектов
  * - Массивы сортируются рекурсивно ПЕРЕД сравнением
  * - Сортировка по ключевым полям (id, uuid, code, key, name, title)
- * - Если ключевого поля нет - создаётся хеш из всех полей
+ * - НОВОЕ: Умное сопоставление элементов массива по похожести
+ * - НОВОЕ: Если сортировка не помогла, ищем лучшее соответствие
  *
  * @param actual - Фактические данные (с API)
  * @param expected - Ожидаемые данные (тестовые данные)
@@ -362,7 +418,7 @@ export function deepCompareObjects(actual: any, expected: any): {
     // Проверка на null/undefined
     if (act === null || act === undefined || exp === null || exp === undefined) {
       if (act !== exp) {
-        differences.push(`${path}: expected ${exp}, got ${act}`);
+        differences.push(`Path: ${path}, expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`);
         return false;
       }
       return true;
@@ -373,37 +429,73 @@ export function deepCompareObjects(actual: any, expected: any): {
     const expType = typeof exp;
 
     if (actType !== expType) {
-      differences.push(`${path}: type mismatch - expected ${expType}, got ${actType}`);
+      differences.push(`Path: ${path}, type mismatch - expected ${expType}, got ${actType}`);
       return false;
     }
 
     // Примитивные типы
     if (actType !== 'object') {
       if (act !== exp) {
-        differences.push(`${path}: expected ${exp}, got ${act}`);
+        differences.push(`Path: ${path}, expected ${JSON.stringify(exp)}, got ${JSON.stringify(act)}`);
         return false;
       }
       return true;
     }
 
-    // Массивы - уже отсортированы, сравниваем последовательно
+    // Массивы - сравниваем с умным сопоставлением
     if (Array.isArray(exp)) {
       if (!Array.isArray(act)) {
-        differences.push(`${path}: expected array, got ${typeof act}`);
+        differences.push(`Path: ${path}, expected array, got ${typeof act}`);
         return false;
       }
 
       if (act.length !== exp.length) {
-        differences.push(`${path}: array length mismatch - expected ${exp.length}, got ${act.length}`);
+        differences.push(`Path: ${path}, array length mismatch - expected ${exp.length}, got ${act.length}`);
         return false;
       }
 
-      // Массивы уже отсортированы в sortArraysRecursively
+      // Сначала пробуем сравнить отсортированные массивы
       let allMatch = true;
+      const tempDifferences: string[] = [];
+
       for (let i = 0; i < exp.length; i++) {
-        if (!compare(act[i], exp[i], `${path}[${i}]`)) {
+        const tempPath = `${path}[${i}]`;
+        const oldDiffCount = differences.length;
+
+        if (!compare(act[i], exp[i], tempPath)) {
           allMatch = false;
         }
+      }
+
+      // Если есть несовпадения, пробуем умное сопоставление
+      if (!allMatch && exp.length > 0 && typeof exp[0] === 'object' && exp[0] !== null) {
+        // Очищаем предыдущие ошибки массива
+        const pathPrefix = path + '[';
+        while (differences.length > 0 && differences[differences.length - 1].includes(pathPrefix)) {
+          differences.pop();
+        }
+
+        // Умное сопоставление по похожести
+        const usedActualIndices = new Set<number>();
+        let smartMatch = true;
+
+        for (let i = 0; i < exp.length; i++) {
+          const bestMatchIndex = findBestMatch(exp[i], act, usedActualIndices);
+
+          if (bestMatchIndex === -1) {
+            differences.push(`Path: ${path}[${i}], no matching element found in actual array`);
+            smartMatch = false;
+            continue;
+          }
+
+          usedActualIndices.add(bestMatchIndex);
+
+          if (!compare(act[bestMatchIndex], exp[i], `${path}[${i}]`)) {
+            smartMatch = false;
+          }
+        }
+
+        return smartMatch;
       }
 
       return allMatch;
@@ -415,13 +507,22 @@ export function deepCompareObjects(actual: any, expected: any): {
 
     for (const key of expKeys) {
       if (!(key in act)) {
-        differences.push(`${path}.${key}: missing in actual`);
+        differences.push(`Path: ${path}.${key}, missing in actual response`);
         allMatch = false;
         continue;
       }
 
       if (!compare(act[key], exp[key], `${path}.${key}`)) {
         allMatch = false;
+      }
+    }
+
+    // Проверяем лишние ключи в actual (опционально)
+    const actKeys = Object.keys(act);
+    for (const key of actKeys) {
+      if (!(key in exp)) {
+        // Не считаем ошибкой, но можно логировать для отладки
+        // differences.push(`Path: ${path}.${key}, extra field in actual response`);
       }
     }
 
