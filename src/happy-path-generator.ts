@@ -2544,6 +2544,27 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
     testCode += `      }
     }
 
+    // Детализация если запрос неожиданно вернул успех вместо 422
+    if (!errorCaught) {
+      console.error('\\n❌ Ожидалась ошибка 422, но запрос успешен');
+      console.error('📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+      console.error('📍 Full URL:', ${standUrlVar} + actualEndpoint);
+      console.error('📋 Response status:', response?.status);
+      console.error('📋 Response data:', JSON.stringify(response?.data, null, 2));
+`;
+
+    if (hasBody) {
+      testCode += `      const curlCmd422 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`;
+      console.error('📋 CURL:', curlCmd422);
+`;
+    } else {
+      testCode += `      const curlCmd422 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.error('📋 CURL:', curlCmd422);
+`;
+    }
+
+    testCode += `    }
+
     // Проверяем что запрос вернул 422
     await expect(errorCaught, 'Ожидалась ошибка 422, но запрос успешен').toBe(true);
     await expect(response).toBeDefined();
@@ -2945,6 +2966,27 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
     testCode += `      }
     }
 
+    // Детализация если запрос неожиданно вернул успех вместо 400
+    if (!errorCaught) {
+      console.error('\\n❌ Ожидалась ошибка 400 (дубликат), но запрос успешен');
+      console.error('📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+      console.error('📍 Full URL:', ${standUrlVar} + actualEndpoint);
+      console.error('📋 Response status:', response?.status);
+      console.error('📋 Response data:', JSON.stringify(response?.data, null, 2));
+`;
+
+    if (hasBody) {
+      testCode += `      const curlCmd400 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`;
+      console.error('📋 CURL:', curlCmd400);
+`;
+    } else {
+      testCode += `      const curlCmd400 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.error('📋 CURL:', curlCmd400);
+`;
+    }
+
+    testCode += `    }
+
     // Проверяем что запрос вернул 400
     await expect(errorCaught, 'Ожидалась ошибка 400 (дубликат), но запрос успешен').toBe(true);
     await expect(response).toBeDefined();
@@ -2952,6 +2994,26 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
 
     // Проверяем детальное сообщение об ошибке (из реального response)
     const responseDetail = response.data?.detail || response.data?.message || response.data?.error || JSON.stringify(response.data);
+
+    // Детализация если сообщение об ошибке не совпадает
+    if (responseDetail !== expectedErrorData.detailMessage) {
+      console.error('\\n⚠️  Сообщение об ошибке 400 не совпадает');
+      console.error('📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+      console.error('Ожидалось:', expectedErrorData.detailMessage);
+      console.error('Получено:', responseDetail);
+`;
+
+    if (hasBody) {
+      testCode += `      const curlCmd400Msg = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`;
+      console.error('📋 CURL:', curlCmd400Msg);
+`;
+    } else {
+      testCode += `      const curlCmd400Msg = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.error('📋 CURL:', curlCmd400Msg);
+`;
+    }
+
+    testCode += `    }
 
     // Проверка ТОЧНОГО совпадения сообщения (взято из реального API)
     await expect(responseDetail, 'Сообщение об ошибке должно совпадать').toBe(expectedErrorData.detailMessage);
