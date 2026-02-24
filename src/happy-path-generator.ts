@@ -1737,6 +1737,10 @@ const caseInfoObj = {
   testType: 'api'
 };
 
+// НОВОЕ v14.6: Поля для которых проверяется только НАЛИЧИЕ, но не ЗНАЧЕНИЕ (для всех тестов в файле)
+// Пример: ['totalAmount', 'pagination.total', 'meta.count']
+const skipCheckFieldsGlobal: string[] = [];
+
 test.describe.configure({ mode: "parallel" });
 test.describe(\`API тесты для эндпоинта \${httpMethod} >> \${endpoint} - Happy Path\`, async () => {
 
@@ -1846,6 +1850,10 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     // DB ID: db-id-${request.id}
     // ИСПРАВЛЕНИЕ 12: Реальный endpoint с подставленными параметрами пути
     const actualEndpoint = '${request.endpoint}';
+    // НОВОЕ v14.6: Поля для которых проверяется только НАЛИЧИЕ, но не ЗНАЧЕНИЕ (только для этого теста)
+    // Пример: ['totalAmount', 'pagination.total']
+    const skipCheckFieldsSingle: string[] = [];
+    const skipCheckFields = [...skipCheckFieldsGlobal, ...skipCheckFieldsSingle];
 `;
 
     // Данные
@@ -2047,7 +2055,7 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
       await expect(allMatch, 'Уникальные поля должны совпадать').toBe(true);
 
       // Сравнение остальных полей (без уникальных)
-      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, modifiedUniqueFields);
+      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, modifiedUniqueFields, skipCheckFields);
 `;
       } else {
         // Inline код когда нет отдельных файлов данных
@@ -2084,18 +2092,18 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         fields.forEach(f => delete result[f]);
         return result;
       };
-      const comparison = compareDbWithResponse(removeFields(normalizedExpected, uniqueFieldNames), removeFields(response.data, uniqueFieldNames));
+      const comparison = compareDbWithResponse(removeFields(normalizedExpected, uniqueFieldNames), removeFields(response.data, uniqueFieldNames), skipCheckFields);
 `;
       }
     } else {
       // ИСПРАВЛЕНИЕ v14.5: Когда нет уникальных полей - обычное сравнение
       if (useSeparateDataFiles) {
         testCode += `      // Глубокое сравнение всех полей
-      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, {});
+      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, {}, skipCheckFields);
 `;
       } else {
         testCode += `      // Глубокое сравнение всех полей
-      const comparison = compareDbWithResponse(normalizedExpected, response.data);
+      const comparison = compareDbWithResponse(normalizedExpected, response.data, skipCheckFields);
 `;
       }
     }

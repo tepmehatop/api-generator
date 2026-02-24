@@ -262,16 +262,19 @@ const IGNORE_FIELD_VALUES: string[] = ${JSON.stringify(config.ignoreFieldValues 
 /**
  * Сравнивает response с expected, исключая уникальные поля и skipCompareFields
  * НОВОЕ v14.5.4: Также учитывает ignoreFieldValues
+ * НОВОЕ v14.6: Поддержка skipValueCheckFields - проверка только наличия поля без сравнения значения
  *
  * @param expected - ожидаемый ответ
  * @param actual - фактический ответ
  * @param modifiedFields - поля которые были модифицированы (уникальные)
+ * @param skipValueCheckFields - поля для которых проверяется только наличие, не значение
  * @returns результат сравнения с массивом differences
  */
 export function compareWithoutUniqueFields(
   expected: any,
   actual: any,
-  modifiedFields: Record<string, string>
+  modifiedFields: Record<string, string>,
+  skipValueCheckFields: string[] = []
 ): { isEqual: boolean; differences: string[] } {
   const uniqueFieldNames = Object.keys(modifiedFields);
   // Объединяем уникальные поля + skipCompareFields
@@ -350,7 +353,7 @@ export function compareWithoutUniqueFields(
     actualProcessed = normalizeIgnoredFields(actualProcessed, IGNORE_FIELD_VALUES);
   }
 
-  const result = compareDbWithResponse(expectedProcessed, actualProcessed);
+  const result = compareDbWithResponse(expectedProcessed, actualProcessed, skipValueCheckFields);
   return { isEqual: result.isEqual, differences: result.differences };
 }
 

@@ -402,17 +402,31 @@ function findBestMatch(item: any, candidates: any[], usedIndices: Set<number>): 
  *
  * @param actual - Фактические данные (с API)
  * @param expected - Ожидаемые данные (тестовые данные)
+ * @param skipValueCheckFields - Поля для которых проверяется только наличие, но не значение
  * @returns Результат сравнения с массивом различий
  */
-export function deepCompareObjects(actual: any, expected: any): {
+export function deepCompareObjects(actual: any, expected: any, skipValueCheckFields: string[] = []): {
   isEqual: boolean;
   differences: string[];
 } {
   const differences: string[] = [];
 
-  // НОВОЕ v14.1: Сортируем ОБА объекта рекурсивно перед сравнением
+  // Сортируем ОБА объекта рекурсивно перед сравнением
   const sortedActual = sortArraysRecursively(actual);
   const sortedExpected = sortArraysRecursively(expected);
+
+  // Проверяет, должно ли поле пропустить сравнение значения (только проверка наличия)
+  function matchesSkipField(fieldPath: string): boolean {
+    if (skipValueCheckFields.length === 0) return false;
+    const cleanPath = fieldPath.replace(/^root\./, '');
+    for (const skipField of skipValueCheckFields) {
+      const cleanSkip = skipField.replace(/^root\./, '');
+      if (cleanPath === cleanSkip) return true;
+      if (!cleanSkip.includes('.') && (cleanPath === cleanSkip || cleanPath.endsWith('.' + cleanSkip))) return true;
+      if (cleanPath.endsWith(cleanSkip)) return true;
+    }
+    return false;
+  }
 
   function compare(act: any, exp: any, path: string = 'root'): boolean {
     // Проверка на null/undefined
@@ -456,13 +470,9 @@ export function deepCompareObjects(actual: any, expected: any): {
 
       // Сначала пробуем сравнить отсортированные массивы
       let allMatch = true;
-      const tempDifferences: string[] = [];
 
       for (let i = 0; i < exp.length; i++) {
-        const tempPath = `${path}[${i}]`;
-        const oldDiffCount = differences.length;
-
-        if (!compare(act[i], exp[i], tempPath)) {
+        if (!compare(act[i], exp[i], `${path}[${i}]`)) {
           allMatch = false;
         }
       }
@@ -506,23 +516,22 @@ export function deepCompareObjects(actual: any, expected: any): {
     let allMatch = true;
 
     for (const key of expKeys) {
+      const fieldPath = `${path}.${key}`;
+
       if (!(key in act)) {
-        differences.push(`Path: ${path}.${key}, missing in actual response`);
+        differences.push(`Path: ${fieldPath}, missing in actual response`);
         allMatch = false;
         continue;
       }
 
-      if (!compare(act[key], exp[key], `${path}.${key}`)) {
-        allMatch = false;
+      // НОВОЕ v14.6: Если поле в skipValueCheckFields - проверяем только наличие, не значение
+      if (matchesSkipField(fieldPath)) {
+        // Поле есть - ок, значение не сравниваем
+        continue;
       }
-    }
 
-    // Проверяем лишние ключи в actual (опционально)
-    const actKeys = Object.keys(act);
-    for (const key of actKeys) {
-      if (!(key in exp)) {
-        // Не считаем ошибкой, но можно логировать для отладки
-        // differences.push(`Path: ${path}.${key}, extra field in actual response`);
+      if (!compare(act[key], exp[key], fieldPath)) {
+        allMatch = false;
       }
     }
 
@@ -537,7 +546,7 @@ export function deepCompareObjects(actual: any, expected: any): {
 /**
  * Комбинированная функция для сравнения данных из БД с response
  */
-export function compareDbWithResponse(dbData: any, responseData: any): {
+export function compareDbWithResponse(dbData: any, responseData: any, skipValueCheckFields: string[] = []): {
   isEqual: boolean;
   differences: string[];
   normalizedDb: any;
@@ -551,7 +560,7 @@ export function compareDbWithResponse(dbData: any, responseData: any): {
   normalizedResponse = convertDataTypes(normalizedResponse);
 
   // Сравниваем
-  const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb);
+  const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields);
 
   return {
     isEqual,
