@@ -19,6 +19,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { generateSmartUniqueValue } from './unique-value-generator';
 
 export interface ValidationConfig {
   enabled?: boolean;
@@ -39,6 +40,21 @@ export interface ValidationConfig {
    * @default 1 (без повторов)
    */
   validationRetries?: number;
+
+  // НОВОЕ v14.6.1: Подмена уникальных полей перед валидацией
+  /**
+   * Поля в request body которые нужно заменить на уникальные значения перед валидацией.
+   * Каждая попытка (retry) получает НОВЫЕ значения.
+   * Предотвращает 400 "уже существует" при валидации.
+   * @example ['name', 'code', 'title']
+   */
+  uniqueFields?: string[];
+
+  /**
+   * Поля из uniqueFields которые должны генерироваться в ВЕРХНЕМ регистре
+   * @example ['code']
+   */
+  uniqueFieldsUpperCase?: string[];
 
   // НОВОЕ v14.1: Логирование ошибок валидации
   /**
@@ -455,8 +471,9 @@ export async function validateRequest(
   const fullUrl = standUrl + request.endpoint;
   const retries = config.validationRetries || 1;
   const isModifyingMethod = ['POST', 'PUT', 'PATCH'].includes(request.method);
+  const hasUniqueFields = isModifyingMethod && config.uniqueFields && config.uniqueFields.length > 0;
 
-  console.log(`🔍 Валидация: ${request.method} ${fullUrl}${retries > 1 && isModifyingMethod ? ` (${retries} попыток)` : ''}`);
+  console.log(`🔍 Валидация: ${request.method} ${fullUrl}${retries > 1 && isModifyingMethod ? ` (${retries} попыток)` : ''}${hasUniqueFields ? ` [unique: ${config.uniqueFields!.join(', ')}]` : ''}`);
 
   // НОВОЕ v14.5.4: Для POST/PUT/PATCH делаем несколько попыток если настроено
   const actualRetries = isModifyingMethod ? retries : 1;
@@ -472,11 +489,28 @@ export async function validateRequest(
       console.log(`   Попытка ${attempt}/${actualRetries}...`);
     }
 
+    // НОВОЕ v14.6.1: Подмена уникальных полей перед каждой попыткой
+    // Каждая попытка получает НОВЫЕ значения (не те же что в предыдущей попытке)
+    let requestBody = request.request_body;
+    if (hasUniqueFields && requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody)) {
+      requestBody = { ...requestBody };
+      for (const field of config.uniqueFields!) {
+        if (field in requestBody && typeof requestBody[field] === 'string') {
+          const forceUpper = (config.uniqueFieldsUpperCase || []).includes(field);
+          const genConfig = forceUpper
+            ? { fieldName: field, type: 'uppercase' as const }
+            : { fieldName: field };
+          const newValue = generateSmartUniqueValue(requestBody[field], genConfig);
+          requestBody[field] = newValue;
+        }
+      }
+    }
+
     lastResult = await executeApiRequest(
       axios,
       request.method,
       fullUrl,
-      request.request_body,
+      requestBody,
       config.axiosConfig
     );
 

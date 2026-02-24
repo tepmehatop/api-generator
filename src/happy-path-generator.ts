@@ -1317,7 +1317,11 @@ export class HappyPathTestGenerator {
           badRequest400SkipLogPath: this.config.duplicateTests.badRequestSkipLogPath,
           skip400MessagePatterns: this.config.duplicateTests.skipMessagePatterns,
           // НОВОЕ v14.5.2: Пропуск пустых response для 400
-          skipEmptyResponse400: this.config.duplicateTests.skipEmptyResponse !== false
+          skipEmptyResponse400: this.config.duplicateTests.skipEmptyResponse !== false,
+          // НОВОЕ v14.6.1: Подмена уникальных полей перед валидацией
+          // Предотвращает 400 "уже существует" при валидации POST/PUT/PATCH
+          uniqueFields: this.config.uniqueFields,
+          uniqueFieldsUpperCase: this.config.uniqueFieldsUpperCase
         };
 
         if (this.config.debug) {
