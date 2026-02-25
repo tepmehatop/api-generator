@@ -55,6 +55,7 @@ exports.validateRequest = validateRequest;
 exports.validateRequests = validateRequests;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const unique_value_generator_1 = require("./unique-value-generator");
 /**
  * Проверяет соответствие имени поля паттерну
  * Поддерживает wildcard '*'
@@ -269,7 +270,8 @@ async function validateRequest(request, config, axios) {
     const fullUrl = standUrl + request.endpoint;
     const retries = config.validationRetries || 1;
     const isModifyingMethod = ['POST', 'PUT', 'PATCH'].includes(request.method);
-    console.log(`🔍 Валидация: ${request.method} ${fullUrl}${retries > 1 && isModifyingMethod ? ` (${retries} попыток)` : ''}`);
+    const hasUniqueFields = isModifyingMethod && config.uniqueFields && config.uniqueFields.length > 0;
+    console.log(`🔍 Валидация: ${request.method} ${fullUrl}${retries > 1 && isModifyingMethod ? ` (${retries} попыток)` : ''}${hasUniqueFields ? ` [unique: ${config.uniqueFields.join(', ')}]` : ''}`);
     // НОВОЕ v14.5.4: Для POST/PUT/PATCH делаем несколько попыток если настроено
     const actualRetries = isModifyingMethod ? retries : 1;
     let lastResult = null;
@@ -282,7 +284,23 @@ async function validateRequest(request, config, axios) {
             await new Promise(resolve => setTimeout(resolve, 200));
             console.log(`   Попытка ${attempt}/${actualRetries}...`);
         }
-        lastResult = await executeApiRequest(axios, request.method, fullUrl, request.request_body, config.axiosConfig);
+        // НОВОЕ v14.6.1: Подмена уникальных полей перед каждой попыткой
+        // Каждая попытка получает НОВЫЕ значения (не те же что в предыдущей попытке)
+        let requestBody = request.request_body;
+        if (hasUniqueFields && requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody)) {
+            requestBody = { ...requestBody };
+            for (const field of config.uniqueFields) {
+                if (field in requestBody && typeof requestBody[field] === 'string') {
+                    const forceUpper = (config.uniqueFieldsUpperCase || []).includes(field);
+                    const genConfig = forceUpper
+                        ? { fieldName: field, type: 'uppercase' }
+                        : { fieldName: field };
+                    const newValue = (0, unique_value_generator_1.generateSmartUniqueValue)(requestBody[field], genConfig);
+                    requestBody[field] = newValue;
+                }
+            }
+        }
+        lastResult = await executeApiRequest(axios, request.method, fullUrl, requestBody, config.axiosConfig);
         // Если получили 4xx - запоминаем и прекращаем
         if (lastResult.status >= 400 && lastResult.status < 500) {
             has4xxError = true;

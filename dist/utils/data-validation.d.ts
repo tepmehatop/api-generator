@@ -34,6 +34,18 @@ export interface ValidationConfig {
      */
     validationRetries?: number;
     /**
+     * Поля в request body которые нужно заменить на уникальные значения перед валидацией.
+     * Каждая попытка (retry) получает НОВЫЕ значения.
+     * Предотвращает 400 "уже существует" при валидации.
+     * @example ['name', 'code', 'title']
+     */
+    uniqueFields?: string[];
+    /**
+     * Поля из uniqueFields которые должны генерироваться в ВЕРХНЕМ регистре
+     * @example ['code']
+     */
+    uniqueFieldsUpperCase?: string[];
+    /**
      * Путь к JSON файлу для логирования 4xx ошибок (400, 404, 422 и т.д.)
      * @example './validation-errors/4xx-errors.json'
      */

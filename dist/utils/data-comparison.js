@@ -349,11 +349,12 @@ function calculateObjectSimilarity(obj1, obj2) {
     return matches / allKeys.size;
 }
 /**
- * НОВОЕ v14.5.9: Находит лучшее соответствие для элемента в массиве
+ * Находит лучшее соответствие для элемента в массиве по схожести полей.
+ * Возвращает -1 если ни один кандидат не имеет хотя бы одного совпадающего поля.
  */
 function findBestMatch(item, candidates, usedIndices) {
     let bestIndex = -1;
-    let bestSimilarity = -1;
+    let bestSimilarity = 0; // минимальный порог: хотя бы одно поле должно совпасть
     for (let i = 0; i < candidates.length; i++) {
         if (usedIndices.has(i))
             continue;
@@ -376,13 +377,35 @@ function findBestMatch(item, candidates, usedIndices) {
  *
  * @param actual - Фактические данные (с API)
  * @param expected - Ожидаемые данные (тестовые данные)
+ * @param skipValueCheckFields - Поля для которых проверяется только наличие, но не значение
  * @returns Результат сравнения с массивом различий
  */
-function deepCompareObjects(actual, expected) {
+function deepCompareObjects(actual, expected, skipValueCheckFields = [], structureOnly = false) {
     const differences = [];
-    // НОВОЕ v14.1: Сортируем ОБА объекта рекурсивно перед сравнением
-    const sortedActual = sortArraysRecursively(actual);
-    const sortedExpected = sortArraysRecursively(expected);
+    // Проверяет, должно ли поле пропустить сравнение значения (только проверка наличия)
+    function matchesSkipField(fieldPath) {
+        if (skipValueCheckFields.length === 0)
+            return false;
+        const cleanPath = fieldPath.replace(/^root\./, '');
+        for (const skipField of skipValueCheckFields) {
+            const cleanSkip = skipField.replace(/^root\./, '');
+            if (cleanPath === cleanSkip)
+                return true;
+            if (!cleanSkip.includes('.') && (cleanPath === cleanSkip || cleanPath.endsWith('.' + cleanSkip)))
+                return true;
+            if (cleanPath.endsWith(cleanSkip))
+                return true;
+        }
+        return false;
+    }
+    // Пробует сравнить два значения без записи ошибок в differences
+    // Используется для поиска точного совпадения элемента в массиве
+    function tryMatch(act, exp) {
+        const savedLength = differences.length;
+        const result = compare(act, exp, '__probe__');
+        differences.length = savedLength; // откатываем добавленные ошибки
+        return result;
+    }
     function compare(act, exp, path = 'root') {
         // Проверка на null/undefined
         if (act === null || act === undefined || exp === null || exp === undefined) {
@@ -392,12 +415,15 @@ function deepCompareObjects(actual, expected) {
             }
             return true;
         }
-        // Проверка типов
         const actType = typeof act;
         const expType = typeof exp;
         if (actType !== expType) {
             differences.push(`Path: ${path}, type mismatch - expected ${expType}, got ${actType}`);
             return false;
+        }
+        // v14.8: structureOnly - примитивы не сравниваем, только проверяем что поле существует
+        if (structureOnly && actType !== 'object') {
+            return true;
         }
         // Примитивные типы
         if (actType !== 'object') {
@@ -407,49 +433,77 @@ function deepCompareObjects(actual, expected) {
             }
             return true;
         }
-        // Массивы - сравниваем с умным сопоставлением
+        // Массивы - v14.7: умное сопоставление без привязки к индексу
         if (Array.isArray(exp)) {
             if (!Array.isArray(act)) {
                 differences.push(`Path: ${path}, expected array, got ${typeof act}`);
                 return false;
             }
-            if (act.length !== exp.length) {
-                differences.push(`Path: ${path}, array length mismatch - expected ${exp.length}, got ${act.length}`);
+            if (exp.length === 0)
+                return true;
+            // v14.8: structureOnly для массивов - проверяем только что массив не пустой
+            // и первый элемент имеет правильную структуру (представитель)
+            if (structureOnly) {
+                if (act.length === 0) {
+                    differences.push(`Path: ${path}, expected non-empty array, got empty array`);
+                    return false;
+                }
+                // Проверяем структуру одного элемента (достаточно первого из actual)
+                return compare(act[0], exp[0], `${path}[0]`);
+            }
+            // Actual может иметь БОЛЬШЕ элементов (добавились новые записи) - это нормально.
+            // Actual не может иметь МЕНЬШЕ - значит ожидаемые элементы отсутствуют.
+            if (act.length < exp.length) {
+                differences.push(`Path: ${path}, array has fewer items than expected: got ${act.length}, expected at least ${exp.length}`);
                 return false;
             }
-            // Сначала пробуем сравнить отсортированные массивы
+            // Примитивные массивы (числа, строки, boolean)
+            // Проверяем что каждое ожидаемое значение присутствует (без учёта порядка)
+            if (typeof exp[0] !== 'object' || exp[0] === null) {
+                const actRemaining = [...act];
+                let allFound = true;
+                for (let i = 0; i < exp.length; i++) {
+                    const idx = actRemaining.indexOf(exp[i]);
+                    if (idx === -1) {
+                        differences.push(`Path: ${path}, expected value ${JSON.stringify(exp[i])} not found in actual array`);
+                        allFound = false;
+                    }
+                    else {
+                        actRemaining.splice(idx, 1); // исключаем из поиска чтобы не сопоставить дважды
+                    }
+                }
+                return allFound;
+            }
+            // Массивы объектов - ищем каждый ожидаемый элемент в actual без привязки к индексу
+            const usedActualIndices = new Set();
             let allMatch = true;
-            const tempDifferences = [];
             for (let i = 0; i < exp.length; i++) {
-                const tempPath = `${path}[${i}]`;
-                const oldDiffCount = differences.length;
-                if (!compare(act[i], exp[i], tempPath)) {
+                // Шаг 1: ищем точное совпадение
+                let exactMatchIndex = -1;
+                for (let j = 0; j < act.length; j++) {
+                    if (usedActualIndices.has(j))
+                        continue;
+                    if (tryMatch(act[j], exp[i])) {
+                        exactMatchIndex = j;
+                        break;
+                    }
+                }
+                if (exactMatchIndex !== -1) {
+                    usedActualIndices.add(exactMatchIndex);
+                    continue; // нашли - всё хорошо
+                }
+                // Шаг 2: точного нет - ищем наиболее похожий элемент для отчёта об ошибке
+                const bestMatchIndex = findBestMatch(exp[i], act, usedActualIndices);
+                if (bestMatchIndex === -1) {
+                    differences.push(`Path: ${path}[${i}], no matching element found in actual array`);
+                    allMatch = false;
+                    continue;
+                }
+                usedActualIndices.add(bestMatchIndex);
+                // Сравниваем лучшее совпадение чтобы показать конкретные различия
+                if (!compare(act[bestMatchIndex], exp[i], `${path}[${i}]`)) {
                     allMatch = false;
                 }
-            }
-            // Если есть несовпадения, пробуем умное сопоставление
-            if (!allMatch && exp.length > 0 && typeof exp[0] === 'object' && exp[0] !== null) {
-                // Очищаем предыдущие ошибки массива
-                const pathPrefix = path + '[';
-                while (differences.length > 0 && differences[differences.length - 1].includes(pathPrefix)) {
-                    differences.pop();
-                }
-                // Умное сопоставление по похожести
-                const usedActualIndices = new Set();
-                let smartMatch = true;
-                for (let i = 0; i < exp.length; i++) {
-                    const bestMatchIndex = findBestMatch(exp[i], act, usedActualIndices);
-                    if (bestMatchIndex === -1) {
-                        differences.push(`Path: ${path}[${i}], no matching element found in actual array`);
-                        smartMatch = false;
-                        continue;
-                    }
-                    usedActualIndices.add(bestMatchIndex);
-                    if (!compare(act[bestMatchIndex], exp[i], `${path}[${i}]`)) {
-                        smartMatch = false;
-                    }
-                }
-                return smartMatch;
             }
             return allMatch;
         }
@@ -457,39 +511,36 @@ function deepCompareObjects(actual, expected) {
         const expKeys = Object.keys(exp);
         let allMatch = true;
         for (const key of expKeys) {
+            const fieldPath = `${path}.${key}`;
             if (!(key in act)) {
-                differences.push(`Path: ${path}.${key}, missing in actual response`);
+                differences.push(`Path: ${fieldPath}, missing in actual response`);
                 allMatch = false;
                 continue;
             }
-            if (!compare(act[key], exp[key], `${path}.${key}`)) {
-                allMatch = false;
+            // v14.6: Если поле в skipValueCheckFields - проверяем только наличие, не значение
+            if (matchesSkipField(fieldPath)) {
+                continue;
             }
-        }
-        // Проверяем лишние ключи в actual (опционально)
-        const actKeys = Object.keys(act);
-        for (const key of actKeys) {
-            if (!(key in exp)) {
-                // Не считаем ошибкой, но можно логировать для отладки
-                // differences.push(`Path: ${path}.${key}, extra field in actual response`);
+            if (!compare(act[key], exp[key], fieldPath)) {
+                allMatch = false;
             }
         }
         return allMatch;
     }
-    const isEqual = compare(sortedActual, sortedExpected);
+    const isEqual = compare(actual, expected);
     return { isEqual, differences };
 }
 /**
  * Комбинированная функция для сравнения данных из БД с response
  */
-function compareDbWithResponse(dbData, responseData) {
+function compareDbWithResponse(dbData, responseData, skipValueCheckFields = [], structureOnly = false) {
     // Нормализуем оба объекта
     let normalizedDb = normalizeDbData(dbData);
     normalizedDb = convertDataTypes(normalizedDb);
     let normalizedResponse = normalizeDbData(responseData);
     normalizedResponse = convertDataTypes(normalizedResponse);
     // Сравниваем
-    const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb);
+    const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields, structureOnly);
     return {
         isEqual,
         differences,

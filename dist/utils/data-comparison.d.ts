@@ -62,16 +62,17 @@ export declare function convertDataTypes(data: any): any;
  *
  * @param actual - Фактические данные (с API)
  * @param expected - Ожидаемые данные (тестовые данные)
+ * @param skipValueCheckFields - Поля для которых проверяется только наличие, но не значение
  * @returns Результат сравнения с массивом различий
  */
-export declare function deepCompareObjects(actual: any, expected: any): {
+export declare function deepCompareObjects(actual: any, expected: any, skipValueCheckFields?: string[], structureOnly?: boolean): {
     isEqual: boolean;
     differences: string[];
 };
 /**
  * Комбинированная функция для сравнения данных из БД с response
  */
-export declare function compareDbWithResponse(dbData: any, responseData: any): {
+export declare function compareDbWithResponse(dbData: any, responseData: any, skipValueCheckFields?: string[], structureOnly?: boolean): {
     isEqual: boolean;
     differences: string[];
     normalizedDb: any;
