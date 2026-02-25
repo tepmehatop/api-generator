@@ -274,7 +274,8 @@ export function compareWithoutUniqueFields(
   expected: any,
   actual: any,
   modifiedFields: Record<string, string>,
-  skipValueCheckFields: string[] = []
+  skipValueCheckFields: string[] = [],
+  structureOnly: boolean = false
 ): { isEqual: boolean; differences: string[] } {
   const uniqueFieldNames = Object.keys(modifiedFields);
   // Объединяем уникальные поля + skipCompareFields
@@ -353,7 +354,7 @@ export function compareWithoutUniqueFields(
     actualProcessed = normalizeIgnoredFields(actualProcessed, IGNORE_FIELD_VALUES);
   }
 
-  const result = compareDbWithResponse(expectedProcessed, actualProcessed, skipValueCheckFields);
+  const result = compareDbWithResponse(expectedProcessed, actualProcessed, skipValueCheckFields, structureOnly);
   return { isEqual: result.isEqual, differences: result.differences };
 }
 

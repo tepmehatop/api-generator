@@ -406,7 +406,7 @@ function findBestMatch(item: any, candidates: any[], usedIndices: Set<number>): 
  * @param skipValueCheckFields - Поля для которых проверяется только наличие, но не значение
  * @returns Результат сравнения с массивом различий
  */
-export function deepCompareObjects(actual: any, expected: any, skipValueCheckFields: string[] = []): {
+export function deepCompareObjects(actual: any, expected: any, skipValueCheckFields: string[] = [], structureOnly: boolean = false): {
   isEqual: boolean;
   differences: string[];
 } {
@@ -452,6 +452,11 @@ export function deepCompareObjects(actual: any, expected: any, skipValueCheckFie
       return false;
     }
 
+    // v14.8: structureOnly - примитивы не сравниваем, только проверяем что поле существует
+    if (structureOnly && actType !== 'object') {
+      return true;
+    }
+
     // Примитивные типы
     if (actType !== 'object') {
       if (act !== exp) {
@@ -469,6 +474,17 @@ export function deepCompareObjects(actual: any, expected: any, skipValueCheckFie
       }
 
       if (exp.length === 0) return true;
+
+      // v14.8: structureOnly для массивов - проверяем только что массив не пустой
+      // и первый элемент имеет правильную структуру (представитель)
+      if (structureOnly) {
+        if (act.length === 0) {
+          differences.push(`Path: ${path}, expected non-empty array, got empty array`);
+          return false;
+        }
+        // Проверяем структуру одного элемента (достаточно первого из actual)
+        return compare(act[0], exp[0], `${path}[0]`);
+      }
 
       // Actual может иметь БОЛЬШЕ элементов (добавились новые записи) - это нормально.
       // Actual не может иметь МЕНЬШЕ - значит ожидаемые элементы отсутствуют.
@@ -567,7 +583,7 @@ export function deepCompareObjects(actual: any, expected: any, skipValueCheckFie
 /**
  * Комбинированная функция для сравнения данных из БД с response
  */
-export function compareDbWithResponse(dbData: any, responseData: any, skipValueCheckFields: string[] = []): {
+export function compareDbWithResponse(dbData: any, responseData: any, skipValueCheckFields: string[] = [], structureOnly: boolean = false): {
   isEqual: boolean;
   differences: string[];
   normalizedDb: any;
@@ -581,7 +597,7 @@ export function compareDbWithResponse(dbData: any, responseData: any, skipValueC
   normalizedResponse = convertDataTypes(normalizedResponse);
 
   // Сравниваем
-  const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields);
+  const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields, structureOnly);
 
   return {
     isEqual,
