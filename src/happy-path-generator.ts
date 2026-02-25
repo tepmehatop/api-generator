@@ -1591,11 +1591,30 @@ export class HappyPathTestGenerator {
         }
       }
 
+      // v14.8.1: Сохраняем пользовательские настройки перед перегенерацией
+      let savedSettings: Record<string, any> | null = null;
+      if (fileExists && this.config.force) {
+        const oldContent = fs.readFileSync(filePath, 'utf-8');
+        savedSettings = this.extractTestSettings(oldContent);
+        if (this.hasNonDefaultSettings(savedSettings)) {
+          const nonDefaultCount = Object.values(savedSettings.tests as Record<string, any>)
+            .filter(t => t.skipCheckFieldsSingle || t.checkStructureOnlySingle).length;
+          console.log(`  💾 Сохранены настройки: global=${savedSettings.global.skipCheckFieldsGlobal || savedSettings.global.checkStructureOnlyGlobal ? 'да' : 'нет'}, тестов с настройками: ${nonDefaultCount}`);
+        }
+      }
+
       const testCode = await this.generateTestFile(endpoint, method, requests, outputDir);
-
       fs.writeFileSync(filePath, testCode, 'utf-8');
-      newTestsAdded = requests.length;
 
+      // v14.8.1: Восстанавливаем сохранённые настройки в новом файле
+      if (savedSettings && this.hasNonDefaultSettings(savedSettings)) {
+        const newContent = fs.readFileSync(filePath, 'utf-8');
+        const restoredContent = this.restoreTestSettings(newContent, savedSettings);
+        fs.writeFileSync(filePath, restoredContent, 'utf-8');
+        console.log(`  ♻️  Настройки восстановлены в ${fileName}.happy-path.test.ts`);
+      }
+
+      newTestsAdded = requests.length;
       const mode = this.config.force ? '🔄' : '✨';
       console.log(`  ${mode} ${fileName}.happy-path.test.ts (${requests.length})`);
     }
@@ -1611,6 +1630,128 @@ export class HappyPathTestGenerator {
   private extractTestIds(content: string): string[] {
     const matches = content.matchAll(/\/\/\s*DB ID:\s*(db-id-\d+)/g);
     return Array.from(matches, m => m[1]);
+  }
+
+  /**
+   * v14.8.1: Извлекает пользовательские настройки из существующего файла теста.
+   * Сохраняет значения skipCheckFields* и checkStructureOnly* перед перегенерацией.
+   */
+  private extractTestSettings(content: string): Record<string, any> {
+    const settings: Record<string, any> = {
+      global: {
+        skipCheckFieldsGlobal: null as string | null,
+        checkStructureOnlyGlobal: null as string | null,
+      },
+      tests: {} as Record<string, { skipCheckFieldsSingle: string | null; checkStructureOnlySingle: string | null }>
+    };
+
+    const lines = content.split('\n');
+    let currentDbId: string | null = null;
+
+    for (const line of lines) {
+      // Файловый уровень: skipCheckFieldsGlobal
+      const globalSkipMatch = line.match(/^\s*const skipCheckFieldsGlobal: string\[\] = (\[.*\]);/);
+      if (globalSkipMatch && globalSkipMatch[1] !== '[]') {
+        settings.global.skipCheckFieldsGlobal = globalSkipMatch[1];
+      }
+
+      // Файловый уровень: checkStructureOnlyGlobal
+      const globalStructureMatch = line.match(/^\s*const checkStructureOnlyGlobal = (true|false);/);
+      if (globalStructureMatch && globalStructureMatch[1] === 'true') {
+        settings.global.checkStructureOnlyGlobal = 'true';
+      }
+
+      // Маркер DB ID — начало нового теста
+      const dbIdMatch = line.match(/\/\/\s*DB ID:\s*db-id-(\d+)/);
+      if (dbIdMatch) {
+        currentDbId = dbIdMatch[1];
+        if (!settings.tests[currentDbId]) {
+          settings.tests[currentDbId] = { skipCheckFieldsSingle: null, checkStructureOnlySingle: null };
+        }
+      }
+
+      if (currentDbId) {
+        // Уровень теста: skipCheckFieldsSingle
+        const singleSkipMatch = line.match(/^\s*const skipCheckFieldsSingle: string\[\] = (\[.*\]);/);
+        if (singleSkipMatch && singleSkipMatch[1] !== '[]') {
+          settings.tests[currentDbId].skipCheckFieldsSingle = singleSkipMatch[1];
+        }
+
+        // Уровень теста: checkStructureOnlySingle
+        const singleStructureMatch = line.match(/^\s*const checkStructureOnlySingle = (true|false);/);
+        if (singleStructureMatch) {
+          if (singleStructureMatch[1] === 'true') {
+            settings.tests[currentDbId].checkStructureOnlySingle = 'true';
+          }
+          currentDbId = null; // оба параметра считаны — сбрасываем
+        }
+      }
+    }
+
+    return settings;
+  }
+
+  /**
+   * v14.8.1: Восстанавливает пользовательские настройки в новом файле теста.
+   * Применяет сохранённые значения skipCheckFields* и checkStructureOnly* по DB ID.
+   */
+  private restoreTestSettings(content: string, settings: Record<string, any>): string {
+    let result = content;
+
+    // Восстанавливаем файловый уровень
+    if (settings.global.skipCheckFieldsGlobal) {
+      result = result.replace(
+        /^(const skipCheckFieldsGlobal: string\[\] = )\[\];/m,
+        `$1${settings.global.skipCheckFieldsGlobal};`
+      );
+    }
+    if (settings.global.checkStructureOnlyGlobal === 'true') {
+      result = result.replace(
+        /^(const checkStructureOnlyGlobal = )false;/m,
+        `$1true;`
+      );
+    }
+
+    // Восстанавливаем настройки каждого теста по DB ID
+    for (const [dbId, testSettings] of Object.entries(settings.tests as Record<string, any>)) {
+      if (!testSettings.skipCheckFieldsSingle && !testSettings.checkStructureOnlySingle) continue;
+
+      // Находим позицию DB ID в файле и заменяем настройки ПОСЛЕ него
+      const dbIdMarker = `// DB ID: db-id-${dbId}`;
+      const markerPos = result.indexOf(dbIdMarker);
+      if (markerPos === -1) continue; // этого теста нет в новом файле — пропускаем
+
+      // Берём фрагмент после маркера (до следующего DB ID или конца)
+      const nextMarkerPos = result.indexOf('// DB ID: db-id-', markerPos + dbIdMarker.length);
+      const blockEnd = nextMarkerPos !== -1 ? nextMarkerPos : result.length;
+      const block = result.slice(markerPos, blockEnd);
+
+      let newBlock = block;
+
+      if (testSettings.skipCheckFieldsSingle) {
+        newBlock = newBlock.replace(
+          /^(\s*const skipCheckFieldsSingle: string\[\] = )\[\];/m,
+          `$1${testSettings.skipCheckFieldsSingle};`
+        );
+      }
+      if (testSettings.checkStructureOnlySingle === 'true') {
+        newBlock = newBlock.replace(
+          /^(\s*const checkStructureOnlySingle = )false;/m,
+          `$1true;`
+        );
+      }
+
+      result = result.slice(0, markerPos) + newBlock + result.slice(blockEnd);
+    }
+
+    return result;
+  }
+
+  /** v14.8.1: Проверяет есть ли в сохранённых настройках хоть что-то не-дефолтное */
+  private hasNonDefaultSettings(settings: Record<string, any>): boolean {
+    if (settings.global.skipCheckFieldsGlobal || settings.global.checkStructureOnlyGlobal) return true;
+    return Object.values(settings.tests as Record<string, any>)
+      .some(t => t.skipCheckFieldsSingle || t.checkStructureOnlySingle);
   }
 
   private async appendTestsToFile(
