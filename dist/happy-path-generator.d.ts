@@ -599,6 +599,18 @@ export declare class HappyPathTestGenerator {
     private fetchUniqueRequests;
     private generateTestsForEndpoint;
     private extractTestIds;
+    /**
+     * v14.8.1: Извлекает пользовательские настройки из существующего файла теста.
+     * Сохраняет значения skipCheckFields* и checkStructureOnly* перед перегенерацией.
+     */
+    private extractTestSettings;
+    /**
+     * v14.8.1: Восстанавливает пользовательские настройки в новом файле теста.
+     * Применяет сохранённые значения skipCheckFields* и checkStructureOnly* по DB ID.
+     */
+    private restoreTestSettings;
+    /** v14.8.1: Проверяет есть ли в сохранённых настройках хоть что-то не-дефолтное */
+    private hasNonDefaultSettings;
     private appendTestsToFile;
     /**
      * Генерирует полный файл теста
@@ -670,6 +682,7 @@ export declare class HappyPathTestGenerator {
 export declare function generateHappyPathTests(config: HappyPathTestConfig, sqlConnection: any): Promise<void>;
 /**
  * Конфигурация для переактуализации тестовых данных
+ * ОБНОВЛЕНО v14.9: добавлены uniqueFields, uniqueFieldsUpperCase
  */
 export interface ReActualizeConfig {
     /**
@@ -704,6 +717,16 @@ export interface ReActualizeConfig {
      * @default false
      */
     debug?: boolean;
+    /**
+     * Поля которые должны быть уникальными (рандомизируются при POST/PUT/PATCH запросах)
+     * @example ['code', 'name']
+     */
+    uniqueFields?: string[];
+    /**
+     * Поля из uniqueFields которые должны быть в UPPER_CASE
+     * @example ['code']
+     */
+    uniqueFieldsUpperCase?: string[];
 }
 /**
  * Результат переактуализации

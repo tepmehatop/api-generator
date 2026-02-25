@@ -67,6 +67,7 @@ import { validateRequests, Validation422Error, Duplicate400Error } from './utils
 import { generateErrorEmailHtml, ErrorNotificationData } from './utils/error-notification';
 import { generateTestHelpersCode, TestHelpersConfig } from './utils/test-helpers-generator';
 import axios from 'axios';
+import { generateSmartUniqueValue } from './utils/unique-value-generator';
 
 export interface HappyPathTestConfig {
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3188,6 +3189,7 @@ export async function generateHappyPathTests(
 
 /**
  * Конфигурация для переактуализации тестовых данных
+ * ОБНОВЛЕНО v14.9: добавлены uniqueFields, uniqueFieldsUpperCase
  */
 export interface ReActualizeConfig {
   /**
@@ -3227,6 +3229,18 @@ export interface ReActualizeConfig {
    * @default false
    */
   debug?: boolean;
+
+  /**
+   * Поля которые должны быть уникальными (рандомизируются при POST/PUT/PATCH запросах)
+   * @example ['code', 'name']
+   */
+  uniqueFields?: string[];
+
+  /**
+   * Поля из uniqueFields которые должны быть в UPPER_CASE
+   * @example ['code']
+   */
+  uniqueFieldsUpperCase?: string[];
 }
 
 /**
@@ -3275,7 +3289,9 @@ export async function reActualizeHappyPathTests(
     standUrl,
     axiosConfig,
     updateFiles = true,
-    debug = false
+    debug = false,
+    uniqueFields = [],
+    uniqueFieldsUpperCase = []
   } = config;
 
   console.log('🔄 Начинаю переактуализацию тестовых данных...');
@@ -3295,13 +3311,11 @@ export async function reActualizeHappyPathTests(
     details: []
   };
 
-  // Проверяем существование папки
   if (!fs.existsSync(testsDir)) {
     console.error(`❌ Папка не найдена: ${testsDir}`);
     return result;
   }
 
-  // Получаем все тестовые файлы рекурсивно
   const testFiles = getTestFilesRecursively(testsDir);
   console.log(`📋 Найдено тестовых файлов: ${testFiles.length}`);
 
@@ -3312,21 +3326,14 @@ export async function reActualizeHappyPathTests(
 
     try {
       const fileContent = fs.readFileSync(testFile, 'utf-8');
-
-      // Извлекаем информацию о тесте
-      const testInfo = extractTestInfo(fileContent);
+      const testInfo = extractTestInfo(fileContent, testFile);
 
       if (!testInfo) {
-        if (debug) {
-          console.log(`  ⚠️  Не удалось извлечь информацию о тесте`);
-        }
+        if (debug) console.log(`  ⚠️  Не удалось извлечь информацию о тесте`);
         result.skippedTests++;
         result.details.push({
-          testFile,
-          endpoint: 'unknown',
-          method: 'unknown',
-          status: 'skipped',
-          reason: 'Could not extract test info'
+          testFile, endpoint: 'unknown', method: 'unknown',
+          status: 'skipped', reason: 'Could not extract test info'
         });
         continue;
       }
@@ -3337,78 +3344,92 @@ export async function reActualizeHappyPathTests(
       if (endpointFilter.length > 0) {
         const matchesFilter = endpointFilter.some(filter => {
           const normalizedFilter = filter.replace(/\{[^}]+\}/g, '{id}');
-          const normalizedEndpoint = testInfo.endpoint.replace(/\{[^}]+\}/g, '{id}').replace(/\/\d+/g, '/{id}');
-          return normalizedEndpoint.includes(normalizedFilter) || normalizedFilter.includes(normalizedEndpoint);
+          const normalizedEndpoint = testInfo.endpoint
+            .replace(/\{[^}]+\}/g, '{id}')
+            .replace(/\/\d+/g, '/{id}');
+          return normalizedEndpoint.includes(normalizedFilter) ||
+                 normalizedFilter.includes(normalizedEndpoint);
         });
 
         if (!matchesFilter) {
-          if (debug) {
-            console.log(`  ⏭️  Пропущен (не соответствует фильтру)`);
-          }
+          if (debug) console.log(`  ⏭️  Пропущен (не соответствует фильтру)`);
           result.skippedTests++;
           result.details.push({
-            testFile,
-            endpoint: testInfo.endpoint,
-            method: testInfo.method,
-            status: 'skipped',
-            reason: 'Does not match endpoint filter'
+            testFile, endpoint: testInfo.endpoint, method: testInfo.method,
+            status: 'skipped', reason: 'Does not match endpoint filter'
           });
           continue;
         }
       }
 
-      // Вызываем endpoint
       console.log(`  🌐 ${testInfo.method} ${testInfo.endpoint}`);
 
       try {
         const fullUrl = standUrl + testInfo.endpoint;
-        let response;
+        const hasBody = ['POST', 'PUT', 'PATCH'].includes(testInfo.method.toUpperCase());
 
-        if (['POST', 'PUT', 'PATCH'].includes(testInfo.method.toUpperCase())) {
-          response = await axios({
-            method: testInfo.method.toLowerCase(),
-            url: fullUrl,
-            data: testInfo.requestData,
-            ...axiosConfig
-          });
-        } else {
-          response = await axios({
-            method: testInfo.method.toLowerCase(),
-            url: fullUrl,
-            ...axiosConfig
-          });
+        // Рандомизируем уникальные поля для POST/PUT/PATCH
+        let requestBody = testInfo.requestData;
+        if (hasBody && uniqueFields.length > 0 &&
+            requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody)) {
+          requestBody = { ...requestBody };
+          for (const field of uniqueFields) {
+            if (field in requestBody && typeof requestBody[field] === 'string') {
+              const forceUpper = uniqueFieldsUpperCase.includes(field);
+              const genConfig = forceUpper
+                ? { fieldName: field, type: 'uppercase' as const }
+                : { fieldName: field };
+              requestBody[field] = generateSmartUniqueValue(requestBody[field], genConfig);
+            }
+          }
+          if (debug) console.log(`    🔑 Уникальные поля рандомизированы`);
         }
 
-        // Сравниваем данные
+        const response = await axios({
+          method: testInfo.method.toLowerCase(),
+          url: fullUrl,
+          ...(hasBody ? { data: requestBody } : {}),
+          ...axiosConfig
+        });
+
         const comparison = compareResponses(testInfo.expectedResponse, response.data);
 
         if (comparison.isEqual) {
           console.log(`    ✅ Данные актуальны`);
           result.details.push({
-            testFile,
-            endpoint: testInfo.endpoint,
-            method: testInfo.method,
+            testFile, endpoint: testInfo.endpoint, method: testInfo.method,
             status: 'unchanged'
           });
         } else {
-          console.log(`    🔄 Обнаружены изменения: ${comparison.changedFields.join(', ')}`);
+          const preview = comparison.changedFields.slice(0, 5).join(', ');
+          const more = comparison.changedFields.length > 5 ? `... (+${comparison.changedFields.length - 5})` : '';
+          console.log(`    🔄 Обнаружены изменения: ${preview}${more}`);
 
           if (updateFiles) {
-            // Обновляем файл
-            const updatedContent = updateTestDataInFile(fileContent, response.data, testInfo);
-            fs.writeFileSync(testFile, updatedContent, 'utf-8');
-            console.log(`    ✅ Файл обновлён`);
+            if (testInfo.dataFilePath) {
+              // Обновляем файл с данными (createSeparateDataFiles режим)
+              const dataContent = fs.readFileSync(testInfo.dataFilePath, 'utf-8');
+              const updatedDataContent = updateJsonInContent(
+                dataContent, 'export const normalizedExpectedResponse =', response.data
+              );
+              fs.writeFileSync(testInfo.dataFilePath, updatedDataContent, 'utf-8');
+              console.log(`    ✅ Обновлён файл данных: ${path.basename(testInfo.dataFilePath)}`);
+            } else {
+              // Обновляем inline данные в тестовом файле
+              const updatedContent = updateJsonInContent(
+                fileContent, 'const normalizedExpected =', response.data
+              );
+              fs.writeFileSync(testFile, updatedContent, 'utf-8');
+              console.log(`    ✅ Файл обновлён`);
+            }
             result.updatedTests++;
           } else {
-            console.log(`    ℹ️  Обновление файла пропущено (updateFiles: false)`);
+            console.log(`    ℹ️  Обновление пропущено (updateFiles: false)`);
           }
 
           result.details.push({
-            testFile,
-            endpoint: testInfo.endpoint,
-            method: testInfo.method,
-            status: 'updated',
-            changedFields: comparison.changedFields
+            testFile, endpoint: testInfo.endpoint, method: testInfo.method,
+            status: 'updated', changedFields: comparison.changedFields
           });
         }
 
@@ -3417,11 +3438,8 @@ export async function reActualizeHappyPathTests(
         console.log(`    ❌ Ошибка API: ${status || apiError.message}`);
         result.failedTests++;
         result.details.push({
-          testFile,
-          endpoint: testInfo.endpoint,
-          method: testInfo.method,
-          status: 'failed',
-          reason: `API error: ${status || apiError.message}`
+          testFile, endpoint: testInfo.endpoint, method: testInfo.method,
+          status: 'failed', reason: `API error: ${status || apiError.message}`
         });
       }
 
@@ -3429,16 +3447,12 @@ export async function reActualizeHappyPathTests(
       console.error(`  ❌ Ошибка обработки файла: ${error.message}`);
       result.failedTests++;
       result.details.push({
-        testFile,
-        endpoint: 'unknown',
-        method: 'unknown',
-        status: 'failed',
-        reason: error.message
+        testFile, endpoint: 'unknown', method: 'unknown',
+        status: 'failed', reason: error.message
       });
     }
   }
 
-  // Итоговая статистика
   console.log('\n📊 Результаты переактуализации:');
   console.log(`   Всего тестов: ${result.totalTests}`);
   console.log(`   Обновлено: ${result.updatedTests}`);
@@ -3449,7 +3463,7 @@ export async function reActualizeHappyPathTests(
 }
 
 /**
- * Рекурсивно получает все .test.ts файлы из папки
+ * Рекурсивно получает все .happy-path.test.ts файлы из папки
  */
 function getTestFilesRecursively(dir: string): string[] {
   const files: string[] = [];
@@ -3473,65 +3487,119 @@ function getTestFilesRecursively(dir: string): string[] {
 }
 
 /**
- * Извлекает информацию о тесте из содержимого файла
+ * Извлекает JSON-блок (объект или массив) из содержимого файла.
+ * Использует счётчик скобок — надёжнее regex для вложенных структур.
  */
-function extractTestInfo(content: string): {
+function extractJsonBlock(
+  content: string,
+  searchPrefix: string
+): { value: string; start: number; end: number } | null {
+  const prefixIdx = content.indexOf(searchPrefix);
+  if (prefixIdx === -1) return null;
+
+  // Пропускаем пробелы/переносы после префикса
+  let i = prefixIdx + searchPrefix.length;
+  while (i < content.length && ' \t\r\n'.includes(content[i])) i++;
+
+  if (i >= content.length) return null;
+
+  const openChar = content[i];
+  if (openChar !== '{' && openChar !== '[') return null;
+
+  const closeChar = openChar === '{' ? '}' : ']';
+  const blockStart = i;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (; i < content.length; i++) {
+    const ch = content[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (inString) {
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === openChar) depth++;
+    else if (ch === closeChar) {
+      depth--;
+      if (depth === 0) {
+        return { value: content.substring(blockStart, i + 1), start: blockStart, end: i + 1 };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Извлекает информацию о тесте из файла.
+ * Поддерживает inline данные и отдельные data-файлы (createSeparateDataFiles).
+ */
+function extractTestInfo(content: string, testFilePath: string): {
   endpoint: string;
   method: string;
   requestData: any;
   expectedResponse: any;
+  dataFilePath?: string;
 } | null {
   try {
-    // Извлекаем endpoint
+    // Реальный endpoint с подставленными ID (всегда статическая строка в тесте)
+    const actualEndpointMatch = content.match(/const actualEndpoint = ['"`]([^'"`]+)['"`]/);
+    // Fallback на шаблонный endpoint
     const endpointMatch = content.match(/const endpoint = ['"`]([^'"`]+)['"`]/);
-    if (!endpointMatch) return null;
+    if (!actualEndpointMatch && !endpointMatch) return null;
 
-    // Извлекаем метод
     const methodMatch = content.match(/const httpMethod = ['"`]([^'"`]+)['"`]/);
     if (!methodMatch) return null;
 
-    // Извлекаем actualEndpoint (реальный endpoint с подставленными ID)
-    const actualEndpointMatch = content.match(/const actualEndpoint = ['"`]([^'"`]+)['"`]/);
+    const endpoint = actualEndpointMatch ? actualEndpointMatch[1] : endpointMatch![1];
+    const method = methodMatch[1];
 
-    // Извлекаем requestData
-    let requestData = {};
-    const requestDataMatch = content.match(/const requestData = (\{[\s\S]*?\});/);
-    if (requestDataMatch) {
-      try {
-        // Пробуем распарсить как JSON-подобную структуру
-        const jsonLike = requestDataMatch[1]
-          .replace(/'/g, '"')
-          .replace(/(\w+):/g, '"$1":')
-          .replace(/,\s*}/g, '}')
-          .replace(/,\s*]/g, ']');
-        requestData = JSON.parse(jsonLike);
-      } catch {
-        // Если не получилось, оставляем пустой объект
+    // Определяем режим: отдельный файл данных или inline
+    // Ищем импорт вида: from './test-data/xxx-data-1'
+    const dataFileImportMatch = content.match(/from ['"`](\.\/test-data\/[^'"`]+-data-\d+)['"`]/);
+
+    if (dataFileImportMatch) {
+      // === Режим createSeparateDataFiles: данные в отдельном файле ===
+      const relPath = dataFileImportMatch[1];
+      const dataFilePath = path.resolve(path.dirname(testFilePath), relPath + '.ts');
+
+      if (!fs.existsSync(dataFilePath)) return null;
+
+      const dataContent = fs.readFileSync(dataFilePath, 'utf-8');
+
+      let requestData: any = {};
+      const rdBlock = extractJsonBlock(dataContent, 'export const requestData =');
+      if (rdBlock) {
+        try { requestData = JSON.parse(rdBlock.value); } catch { /* оставляем {} */ }
       }
-    }
 
-    // Извлекаем normalizedExpected
-    let expectedResponse = {};
-    const normalizedMatch = content.match(/const normalizedExpected = (\{[\s\S]*?\});/);
-    if (normalizedMatch) {
-      try {
-        const jsonLike = normalizedMatch[1]
-          .replace(/'/g, '"')
-          .replace(/(\w+):/g, '"$1":')
-          .replace(/,\s*}/g, '}')
-          .replace(/,\s*]/g, ']');
-        expectedResponse = JSON.parse(jsonLike);
-      } catch {
-        // Если не получилось, оставляем пустой объект
+      let expectedResponse: any = {};
+      const nerBlock = extractJsonBlock(dataContent, 'export const normalizedExpectedResponse =');
+      if (nerBlock) {
+        try { expectedResponse = JSON.parse(nerBlock.value); } catch { /* оставляем {} */ }
       }
-    }
 
-    return {
-      endpoint: actualEndpointMatch ? actualEndpointMatch[1] : endpointMatch[1],
-      method: methodMatch[1],
-      requestData,
-      expectedResponse
-    };
+      return { endpoint, method, requestData, expectedResponse, dataFilePath };
+
+    } else {
+      // === Inline режим: данные прямо в тестовом файле ===
+      let requestData: any = {};
+      const rdBlock = extractJsonBlock(content, 'const requestData =');
+      if (rdBlock) {
+        try { requestData = JSON.parse(rdBlock.value); } catch { /* оставляем {} */ }
+      }
+
+      let expectedResponse: any = {};
+      const neBlock = extractJsonBlock(content, 'const normalizedExpected =');
+      if (neBlock) {
+        try { expectedResponse = JSON.parse(neBlock.value); } catch { /* оставляем {} */ }
+      }
+
+      return { endpoint, method, requestData, expectedResponse };
+    }
   } catch {
     return null;
   }
@@ -3594,24 +3662,17 @@ function compareResponses(expected: any, actual: any): {
 }
 
 /**
- * Обновляет тестовые данные в файле
+ * Заменяет JSON-значение переменной в содержимом файла.
+ * Использует extractJsonBlock для точного определения блока.
  */
-function updateTestDataInFile(
+function updateJsonInContent(
   content: string,
-  newResponseData: any,
-  testInfo: { endpoint: string; method: string }
+  searchPrefix: string,
+  newValue: any
 ): string {
-  // Находим и заменяем normalizedExpected
-  const normalizedExpectedRegex = /(const normalizedExpected = )(\{[\s\S]*?\})(;)/;
+  const block = extractJsonBlock(content, searchPrefix);
+  if (!block) return content;
 
-  if (normalizedExpectedRegex.test(content)) {
-    const formattedData = JSON.stringify(newResponseData, null, 4)
-      .split('\n')
-      .map((line, i) => i === 0 ? line : '    ' + line)
-      .join('\n');
-
-    return content.replace(normalizedExpectedRegex, `$1${formattedData}$3`);
-  }
-
-  return content;
+  const formattedData = JSON.stringify(newValue, null, 2);
+  return content.substring(0, block.start) + formattedData + content.substring(block.end);
 }

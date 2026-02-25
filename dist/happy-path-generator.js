@@ -101,6 +101,7 @@ const test_deduplication_1 = require("./utils/test-deduplication");
 const data_validation_1 = require("./utils/data-validation");
 const test_helpers_generator_1 = require("./utils/test-helpers-generator");
 const axios_1 = __importDefault(require("axios"));
+const unique_value_generator_1 = require("./utils/unique-value-generator");
 /**
  * НОВОЕ v13.0: Рекурсивный поиск файла в директории
  */
@@ -635,7 +636,11 @@ class HappyPathTestGenerator {
                     badRequest400SkipLogPath: this.config.duplicateTests.badRequestSkipLogPath,
                     skip400MessagePatterns: this.config.duplicateTests.skipMessagePatterns,
                     // НОВОЕ v14.5.2: Пропуск пустых response для 400
-                    skipEmptyResponse400: this.config.duplicateTests.skipEmptyResponse !== false
+                    skipEmptyResponse400: this.config.duplicateTests.skipEmptyResponse !== false,
+                    // НОВОЕ v14.6.1: Подмена уникальных полей перед валидацией
+                    // Предотвращает 400 "уже существует" при валидации POST/PUT/PATCH
+                    uniqueFields: this.config.uniqueFields,
+                    uniqueFieldsUpperCase: this.config.uniqueFieldsUpperCase
                 };
                 if (this.config.debug) {
                     console.log(`🐛 Конфиг валидации:`, {
@@ -853,8 +858,26 @@ class HappyPathTestGenerator {
                     fs.mkdirSync(dataDir, { recursive: true });
                 }
             }
+            // v14.8.1: Сохраняем пользовательские настройки перед перегенерацией
+            let savedSettings = null;
+            if (fileExists && this.config.force) {
+                const oldContent = fs.readFileSync(filePath, 'utf-8');
+                savedSettings = this.extractTestSettings(oldContent);
+                if (this.hasNonDefaultSettings(savedSettings)) {
+                    const nonDefaultCount = Object.values(savedSettings.tests)
+                        .filter(t => t.skipCheckFieldsSingle || t.checkStructureOnlySingle).length;
+                    console.log(`  💾 Сохранены настройки: global=${savedSettings.global.skipCheckFieldsGlobal || savedSettings.global.checkStructureOnlyGlobal ? 'да' : 'нет'}, тестов с настройками: ${nonDefaultCount}`);
+                }
+            }
             const testCode = await this.generateTestFile(endpoint, method, requests, outputDir);
             fs.writeFileSync(filePath, testCode, 'utf-8');
+            // v14.8.1: Восстанавливаем сохранённые настройки в новом файле
+            if (savedSettings && this.hasNonDefaultSettings(savedSettings)) {
+                const newContent = fs.readFileSync(filePath, 'utf-8');
+                const restoredContent = this.restoreTestSettings(newContent, savedSettings);
+                fs.writeFileSync(filePath, restoredContent, 'utf-8');
+                console.log(`  ♻️  Настройки восстановлены в ${fileName}.happy-path.test.ts`);
+            }
             newTestsAdded = requests.length;
             const mode = this.config.force ? '🔄' : '✨';
             console.log(`  ${mode} ${fileName}.happy-path.test.ts (${requests.length})`);
@@ -868,6 +891,101 @@ class HappyPathTestGenerator {
     extractTestIds(content) {
         const matches = content.matchAll(/\/\/\s*DB ID:\s*(db-id-\d+)/g);
         return Array.from(matches, m => m[1]);
+    }
+    /**
+     * v14.8.1: Извлекает пользовательские настройки из существующего файла теста.
+     * Сохраняет значения skipCheckFields* и checkStructureOnly* перед перегенерацией.
+     */
+    extractTestSettings(content) {
+        const settings = {
+            global: {
+                skipCheckFieldsGlobal: null,
+                checkStructureOnlyGlobal: null,
+            },
+            tests: {}
+        };
+        const lines = content.split('\n');
+        let currentDbId = null;
+        for (const line of lines) {
+            // Файловый уровень: skipCheckFieldsGlobal
+            const globalSkipMatch = line.match(/^\s*const skipCheckFieldsGlobal: string\[\] = (\[.*\]);/);
+            if (globalSkipMatch && globalSkipMatch[1] !== '[]') {
+                settings.global.skipCheckFieldsGlobal = globalSkipMatch[1];
+            }
+            // Файловый уровень: checkStructureOnlyGlobal
+            const globalStructureMatch = line.match(/^\s*const checkStructureOnlyGlobal = (true|false);/);
+            if (globalStructureMatch && globalStructureMatch[1] === 'true') {
+                settings.global.checkStructureOnlyGlobal = 'true';
+            }
+            // Маркер DB ID — начало нового теста
+            const dbIdMatch = line.match(/\/\/\s*DB ID:\s*db-id-(\d+)/);
+            if (dbIdMatch) {
+                currentDbId = dbIdMatch[1];
+                if (!settings.tests[currentDbId]) {
+                    settings.tests[currentDbId] = { skipCheckFieldsSingle: null, checkStructureOnlySingle: null };
+                }
+            }
+            if (currentDbId) {
+                // Уровень теста: skipCheckFieldsSingle
+                const singleSkipMatch = line.match(/^\s*const skipCheckFieldsSingle: string\[\] = (\[.*\]);/);
+                if (singleSkipMatch && singleSkipMatch[1] !== '[]') {
+                    settings.tests[currentDbId].skipCheckFieldsSingle = singleSkipMatch[1];
+                }
+                // Уровень теста: checkStructureOnlySingle
+                const singleStructureMatch = line.match(/^\s*const checkStructureOnlySingle = (true|false);/);
+                if (singleStructureMatch) {
+                    if (singleStructureMatch[1] === 'true') {
+                        settings.tests[currentDbId].checkStructureOnlySingle = 'true';
+                    }
+                    currentDbId = null; // оба параметра считаны — сбрасываем
+                }
+            }
+        }
+        return settings;
+    }
+    /**
+     * v14.8.1: Восстанавливает пользовательские настройки в новом файле теста.
+     * Применяет сохранённые значения skipCheckFields* и checkStructureOnly* по DB ID.
+     */
+    restoreTestSettings(content, settings) {
+        let result = content;
+        // Восстанавливаем файловый уровень
+        if (settings.global.skipCheckFieldsGlobal) {
+            result = result.replace(/^(const skipCheckFieldsGlobal: string\[\] = )\[\];/m, `$1${settings.global.skipCheckFieldsGlobal};`);
+        }
+        if (settings.global.checkStructureOnlyGlobal === 'true') {
+            result = result.replace(/^(const checkStructureOnlyGlobal = )false;/m, `$1true;`);
+        }
+        // Восстанавливаем настройки каждого теста по DB ID
+        for (const [dbId, testSettings] of Object.entries(settings.tests)) {
+            if (!testSettings.skipCheckFieldsSingle && !testSettings.checkStructureOnlySingle)
+                continue;
+            // Находим позицию DB ID в файле и заменяем настройки ПОСЛЕ него
+            const dbIdMarker = `// DB ID: db-id-${dbId}`;
+            const markerPos = result.indexOf(dbIdMarker);
+            if (markerPos === -1)
+                continue; // этого теста нет в новом файле — пропускаем
+            // Берём фрагмент после маркера (до следующего DB ID или конца)
+            const nextMarkerPos = result.indexOf('// DB ID: db-id-', markerPos + dbIdMarker.length);
+            const blockEnd = nextMarkerPos !== -1 ? nextMarkerPos : result.length;
+            const block = result.slice(markerPos, blockEnd);
+            let newBlock = block;
+            if (testSettings.skipCheckFieldsSingle) {
+                newBlock = newBlock.replace(/^(\s*const skipCheckFieldsSingle: string\[\] = )\[\];/m, `$1${testSettings.skipCheckFieldsSingle};`);
+            }
+            if (testSettings.checkStructureOnlySingle === 'true') {
+                newBlock = newBlock.replace(/^(\s*const checkStructureOnlySingle = )false;/m, `$1true;`);
+            }
+            result = result.slice(0, markerPos) + newBlock + result.slice(blockEnd);
+        }
+        return result;
+    }
+    /** v14.8.1: Проверяет есть ли в сохранённых настройках хоть что-то не-дефолтное */
+    hasNonDefaultSettings(settings) {
+        if (settings.global.skipCheckFieldsGlobal || settings.global.checkStructureOnlyGlobal)
+            return true;
+        return Object.values(settings.tests)
+            .some(t => t.skipCheckFieldsSingle || t.checkStructureOnlySingle);
     }
     async appendTestsToFile(filePath, endpoint, method, requests) {
         let content = fs.readFileSync(filePath, 'utf-8');
@@ -972,6 +1090,14 @@ const caseInfoObj = {
   testType: 'api'
 };
 
+// НОВОЕ v14.6: Поля для которых проверяется только НАЛИЧИЕ, но не ЗНАЧЕНИЕ (для всех тестов в файле)
+// Пример: ['totalAmount', 'pagination.total', 'meta.count']
+const skipCheckFieldsGlobal: string[] = [];
+
+// НОВОЕ v14.8: Проверять только СТРУКТУРУ ответа (поля и типы), но не значения (для всех тестов в файле)
+// Используй для эндпоинтов со списками/пагинацией, где данные меняются между запусками
+const checkStructureOnlyGlobal = false;
+
 test.describe.configure({ mode: "parallel" });
 test.describe(\`API тесты для эндпоинта \${httpMethod} >> \${endpoint} - Happy Path\`, async () => {
 
@@ -1059,6 +1185,13 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     // DB ID: db-id-${request.id}
     // ИСПРАВЛЕНИЕ 12: Реальный endpoint с подставленными параметрами пути
     const actualEndpoint = '${request.endpoint}';
+    // НОВОЕ v14.6: Поля для которых проверяется только НАЛИЧИЕ, но не ЗНАЧЕНИЕ (только для этого теста)
+    // Пример: ['totalAmount', 'pagination.total']
+    const skipCheckFieldsSingle: string[] = [];
+    const skipCheckFields = [...skipCheckFieldsGlobal, ...skipCheckFieldsSingle];
+    // НОВОЕ v14.8: Проверять только СТРУКТУРУ ответа (поля и типы), но не значения (только для этого теста)
+    const checkStructureOnlySingle = false;
+    const checkStructureOnly = checkStructureOnlyGlobal || checkStructureOnlySingle;
 `;
         // Данные
         if (this.config.createSeparateDataFiles) {
@@ -1251,7 +1384,7 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
       await expect(allMatch, 'Уникальные поля должны совпадать').toBe(true);
 
       // Сравнение остальных полей (без уникальных)
-      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, modifiedUniqueFields);
+      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, modifiedUniqueFields, skipCheckFields, checkStructureOnly);
 `;
             }
             else {
@@ -1289,7 +1422,7 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         fields.forEach(f => delete result[f]);
         return result;
       };
-      const comparison = compareDbWithResponse(removeFields(normalizedExpected, uniqueFieldNames), removeFields(response.data, uniqueFieldNames));
+      const comparison = compareDbWithResponse(removeFields(normalizedExpected, uniqueFieldNames), removeFields(response.data, uniqueFieldNames), skipCheckFields, checkStructureOnly);
 `;
             }
         }
@@ -1297,12 +1430,12 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
             // ИСПРАВЛЕНИЕ v14.5: Когда нет уникальных полей - обычное сравнение
             if (useSeparateDataFiles) {
                 testCode += `      // Глубокое сравнение всех полей
-      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, {});
+      const comparison = compareWithoutUniqueFields(normalizedExpected, response.data, {}, skipCheckFields, checkStructureOnly);
 `;
             }
             else {
                 testCode += `      // Глубокое сравнение всех полей
-      const comparison = compareDbWithResponse(normalizedExpected, response.data);
+      const comparison = compareDbWithResponse(normalizedExpected, response.data, skipCheckFields, checkStructureOnly);
 `;
             }
         }
@@ -1677,6 +1810,26 @@ test.describe('${method} ${endpoint} - Validation Tests ${testTag}', () => {
         testCode += `      }
     }
 
+    // Детализация если запрос неожиданно вернул успех вместо 422
+    if (!errorCaught) {
+      console.error('\\n❌ Ожидалась ошибка 422, но запрос успешен');
+      console.error('📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+      console.error('📍 Full URL:', ${standUrlVar} + actualEndpoint);
+      console.error('📋 Response status:', response?.status);
+      console.error('📋 Response data:', JSON.stringify(response?.data, null, 2));
+`;
+        if (hasBody) {
+            testCode += `      const curlCmd422 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`;
+      console.error('📋 CURL:', curlCmd422);
+`;
+        }
+        else {
+            testCode += `      const curlCmd422 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.error('📋 CURL:', curlCmd422);
+`;
+        }
+        testCode += `    }
+
     // Проверяем что запрос вернул 422
     await expect(errorCaught, 'Ожидалась ошибка 422, но запрос успешен').toBe(true);
     await expect(response).toBeDefined();
@@ -2019,6 +2172,26 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
         testCode += `      }
     }
 
+    // Детализация если запрос неожиданно вернул успех вместо 400
+    if (!errorCaught) {
+      console.error('\\n❌ Ожидалась ошибка 400 (дубликат), но запрос успешен');
+      console.error('📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+      console.error('📍 Full URL:', ${standUrlVar} + actualEndpoint);
+      console.error('📋 Response status:', response?.status);
+      console.error('📋 Response data:', JSON.stringify(response?.data, null, 2));
+`;
+        if (hasBody) {
+            testCode += `      const curlCmd400 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`;
+      console.error('📋 CURL:', curlCmd400);
+`;
+        }
+        else {
+            testCode += `      const curlCmd400 = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.error('📋 CURL:', curlCmd400);
+`;
+        }
+        testCode += `    }
+
     // Проверяем что запрос вернул 400
     await expect(errorCaught, 'Ожидалась ошибка 400 (дубликат), но запрос успешен').toBe(true);
     await expect(response).toBeDefined();
@@ -2026,6 +2199,25 @@ test.describe('${method} ${endpoint} - Duplicate Tests ${testTag}', () => {
 
     // Проверяем детальное сообщение об ошибке (из реального response)
     const responseDetail = response.data?.detail || response.data?.message || response.data?.error || JSON.stringify(response.data);
+
+    // Детализация если сообщение об ошибке не совпадает
+    if (responseDetail !== expectedErrorData.detailMessage) {
+      console.error('\\n⚠️  Сообщение об ошибке 400 не совпадает');
+      console.error('📍 Endpoint:', actualEndpoint, '| Method:', httpMethod);
+      console.error('Ожидалось:', expectedErrorData.detailMessage);
+      console.error('Получено:', responseDetail);
+`;
+        if (hasBody) {
+            testCode += `      const curlCmd400Msg = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`;
+      console.error('📋 CURL:', curlCmd400Msg);
+`;
+        }
+        else {
+            testCode += `      const curlCmd400Msg = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
+      console.error('📋 CURL:', curlCmd400Msg);
+`;
+        }
+        testCode += `    }
 
     // Проверка ТОЧНОГО совпадения сообщения (взято из реального API)
     await expect(responseDetail, 'Сообщение об ошибке должно совпадать').toBe(expectedErrorData.detailMessage);
@@ -2058,7 +2250,7 @@ async function generateHappyPathTests(config, sqlConnection) {
  * });
  */
 async function reActualizeHappyPathTests(config) {
-    const { testsDir, endpointFilter = [], standUrl, axiosConfig, updateFiles = true, debug = false } = config;
+    const { testsDir, endpointFilter = [], standUrl, axiosConfig, updateFiles = true, debug = false, uniqueFields = [], uniqueFieldsUpperCase = [] } = config;
     console.log('🔄 Начинаю переактуализацию тестовых данных...');
     console.log(`📁 Папка с тестами: ${testsDir}`);
     if (endpointFilter.length > 0) {
@@ -2074,12 +2266,10 @@ async function reActualizeHappyPathTests(config) {
         failedTests: 0,
         details: []
     };
-    // Проверяем существование папки
     if (!fs.existsSync(testsDir)) {
         console.error(`❌ Папка не найдена: ${testsDir}`);
         return result;
     }
-    // Получаем все тестовые файлы рекурсивно
     const testFiles = getTestFilesRecursively(testsDir);
     console.log(`📋 Найдено тестовых файлов: ${testFiles.length}`);
     for (const testFile of testFiles) {
@@ -2088,19 +2278,14 @@ async function reActualizeHappyPathTests(config) {
         }
         try {
             const fileContent = fs.readFileSync(testFile, 'utf-8');
-            // Извлекаем информацию о тесте
-            const testInfo = extractTestInfo(fileContent);
+            const testInfo = extractTestInfo(fileContent, testFile);
             if (!testInfo) {
-                if (debug) {
+                if (debug)
                     console.log(`  ⚠️  Не удалось извлечь информацию о тесте`);
-                }
                 result.skippedTests++;
                 result.details.push({
-                    testFile,
-                    endpoint: 'unknown',
-                    method: 'unknown',
-                    status: 'skipped',
-                    reason: 'Could not extract test info'
+                    testFile, endpoint: 'unknown', method: 'unknown',
+                    status: 'skipped', reason: 'Could not extract test info'
                 });
                 continue;
             }
@@ -2109,73 +2294,84 @@ async function reActualizeHappyPathTests(config) {
             if (endpointFilter.length > 0) {
                 const matchesFilter = endpointFilter.some(filter => {
                     const normalizedFilter = filter.replace(/\{[^}]+\}/g, '{id}');
-                    const normalizedEndpoint = testInfo.endpoint.replace(/\{[^}]+\}/g, '{id}').replace(/\/\d+/g, '/{id}');
-                    return normalizedEndpoint.includes(normalizedFilter) || normalizedFilter.includes(normalizedEndpoint);
+                    const normalizedEndpoint = testInfo.endpoint
+                        .replace(/\{[^}]+\}/g, '{id}')
+                        .replace(/\/\d+/g, '/{id}');
+                    return normalizedEndpoint.includes(normalizedFilter) ||
+                        normalizedFilter.includes(normalizedEndpoint);
                 });
                 if (!matchesFilter) {
-                    if (debug) {
+                    if (debug)
                         console.log(`  ⏭️  Пропущен (не соответствует фильтру)`);
-                    }
                     result.skippedTests++;
                     result.details.push({
-                        testFile,
-                        endpoint: testInfo.endpoint,
-                        method: testInfo.method,
-                        status: 'skipped',
-                        reason: 'Does not match endpoint filter'
+                        testFile, endpoint: testInfo.endpoint, method: testInfo.method,
+                        status: 'skipped', reason: 'Does not match endpoint filter'
                     });
                     continue;
                 }
             }
-            // Вызываем endpoint
             console.log(`  🌐 ${testInfo.method} ${testInfo.endpoint}`);
             try {
                 const fullUrl = standUrl + testInfo.endpoint;
-                let response;
-                if (['POST', 'PUT', 'PATCH'].includes(testInfo.method.toUpperCase())) {
-                    response = await (0, axios_1.default)({
-                        method: testInfo.method.toLowerCase(),
-                        url: fullUrl,
-                        data: testInfo.requestData,
-                        ...axiosConfig
-                    });
+                const hasBody = ['POST', 'PUT', 'PATCH'].includes(testInfo.method.toUpperCase());
+                // Рандомизируем уникальные поля для POST/PUT/PATCH
+                let requestBody = testInfo.requestData;
+                if (hasBody && uniqueFields.length > 0 &&
+                    requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody)) {
+                    requestBody = { ...requestBody };
+                    for (const field of uniqueFields) {
+                        if (field in requestBody && typeof requestBody[field] === 'string') {
+                            const forceUpper = uniqueFieldsUpperCase.includes(field);
+                            const genConfig = forceUpper
+                                ? { fieldName: field, type: 'uppercase' }
+                                : { fieldName: field };
+                            requestBody[field] = (0, unique_value_generator_1.generateSmartUniqueValue)(requestBody[field], genConfig);
+                        }
+                    }
+                    if (debug)
+                        console.log(`    🔑 Уникальные поля рандомизированы`);
                 }
-                else {
-                    response = await (0, axios_1.default)({
-                        method: testInfo.method.toLowerCase(),
-                        url: fullUrl,
-                        ...axiosConfig
-                    });
-                }
-                // Сравниваем данные
+                const response = await (0, axios_1.default)({
+                    method: testInfo.method.toLowerCase(),
+                    url: fullUrl,
+                    ...(hasBody ? { data: requestBody } : {}),
+                    ...axiosConfig
+                });
                 const comparison = compareResponses(testInfo.expectedResponse, response.data);
                 if (comparison.isEqual) {
                     console.log(`    ✅ Данные актуальны`);
                     result.details.push({
-                        testFile,
-                        endpoint: testInfo.endpoint,
-                        method: testInfo.method,
+                        testFile, endpoint: testInfo.endpoint, method: testInfo.method,
                         status: 'unchanged'
                     });
                 }
                 else {
-                    console.log(`    🔄 Обнаружены изменения: ${comparison.changedFields.join(', ')}`);
+                    const preview = comparison.changedFields.slice(0, 5).join(', ');
+                    const more = comparison.changedFields.length > 5 ? `... (+${comparison.changedFields.length - 5})` : '';
+                    console.log(`    🔄 Обнаружены изменения: ${preview}${more}`);
                     if (updateFiles) {
-                        // Обновляем файл
-                        const updatedContent = updateTestDataInFile(fileContent, response.data, testInfo);
-                        fs.writeFileSync(testFile, updatedContent, 'utf-8');
-                        console.log(`    ✅ Файл обновлён`);
+                        if (testInfo.dataFilePath) {
+                            // Обновляем файл с данными (createSeparateDataFiles режим)
+                            const dataContent = fs.readFileSync(testInfo.dataFilePath, 'utf-8');
+                            const updatedDataContent = updateJsonInContent(dataContent, 'export const normalizedExpectedResponse =', response.data);
+                            fs.writeFileSync(testInfo.dataFilePath, updatedDataContent, 'utf-8');
+                            console.log(`    ✅ Обновлён файл данных: ${path.basename(testInfo.dataFilePath)}`);
+                        }
+                        else {
+                            // Обновляем inline данные в тестовом файле
+                            const updatedContent = updateJsonInContent(fileContent, 'const normalizedExpected =', response.data);
+                            fs.writeFileSync(testFile, updatedContent, 'utf-8');
+                            console.log(`    ✅ Файл обновлён`);
+                        }
                         result.updatedTests++;
                     }
                     else {
-                        console.log(`    ℹ️  Обновление файла пропущено (updateFiles: false)`);
+                        console.log(`    ℹ️  Обновление пропущено (updateFiles: false)`);
                     }
                     result.details.push({
-                        testFile,
-                        endpoint: testInfo.endpoint,
-                        method: testInfo.method,
-                        status: 'updated',
-                        changedFields: comparison.changedFields
+                        testFile, endpoint: testInfo.endpoint, method: testInfo.method,
+                        status: 'updated', changedFields: comparison.changedFields
                     });
                 }
             }
@@ -2184,11 +2380,8 @@ async function reActualizeHappyPathTests(config) {
                 console.log(`    ❌ Ошибка API: ${status || apiError.message}`);
                 result.failedTests++;
                 result.details.push({
-                    testFile,
-                    endpoint: testInfo.endpoint,
-                    method: testInfo.method,
-                    status: 'failed',
-                    reason: `API error: ${status || apiError.message}`
+                    testFile, endpoint: testInfo.endpoint, method: testInfo.method,
+                    status: 'failed', reason: `API error: ${status || apiError.message}`
                 });
             }
         }
@@ -2196,15 +2389,11 @@ async function reActualizeHappyPathTests(config) {
             console.error(`  ❌ Ошибка обработки файла: ${error.message}`);
             result.failedTests++;
             result.details.push({
-                testFile,
-                endpoint: 'unknown',
-                method: 'unknown',
-                status: 'failed',
-                reason: error.message
+                testFile, endpoint: 'unknown', method: 'unknown',
+                status: 'failed', reason: error.message
             });
         }
     }
-    // Итоговая статистика
     console.log('\n📊 Результаты переактуализации:');
     console.log(`   Всего тестов: ${result.totalTests}`);
     console.log(`   Обновлено: ${result.updatedTests}`);
@@ -2213,7 +2402,7 @@ async function reActualizeHappyPathTests(config) {
     return result;
 }
 /**
- * Рекурсивно получает все .test.ts файлы из папки
+ * Рекурсивно получает все .happy-path.test.ts файлы из папки
  */
 function getTestFilesRecursively(dir) {
     const files = [];
@@ -2233,59 +2422,122 @@ function getTestFilesRecursively(dir) {
     return files;
 }
 /**
- * Извлекает информацию о тесте из содержимого файла
+ * Извлекает JSON-блок (объект или массив) из содержимого файла.
+ * Использует счётчик скобок — надёжнее regex для вложенных структур.
  */
-function extractTestInfo(content) {
+function extractJsonBlock(content, searchPrefix) {
+    const prefixIdx = content.indexOf(searchPrefix);
+    if (prefixIdx === -1)
+        return null;
+    // Пропускаем пробелы/переносы после префикса
+    let i = prefixIdx + searchPrefix.length;
+    while (i < content.length && ' \t\r\n'.includes(content[i]))
+        i++;
+    if (i >= content.length)
+        return null;
+    const openChar = content[i];
+    if (openChar !== '{' && openChar !== '[')
+        return null;
+    const closeChar = openChar === '{' ? '}' : ']';
+    const blockStart = i;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (; i < content.length; i++) {
+        const ch = content[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch === '\\' && inString) {
+            escaped = true;
+            continue;
+        }
+        if (inString) {
+            if (ch === '"')
+                inString = false;
+            continue;
+        }
+        if (ch === '"') {
+            inString = true;
+            continue;
+        }
+        if (ch === openChar)
+            depth++;
+        else if (ch === closeChar) {
+            depth--;
+            if (depth === 0) {
+                return { value: content.substring(blockStart, i + 1), start: blockStart, end: i + 1 };
+            }
+        }
+    }
+    return null;
+}
+/**
+ * Извлекает информацию о тесте из файла.
+ * Поддерживает inline данные и отдельные data-файлы (createSeparateDataFiles).
+ */
+function extractTestInfo(content, testFilePath) {
     try {
-        // Извлекаем endpoint
+        // Реальный endpoint с подставленными ID (всегда статическая строка в тесте)
+        const actualEndpointMatch = content.match(/const actualEndpoint = ['"`]([^'"`]+)['"`]/);
+        // Fallback на шаблонный endpoint
         const endpointMatch = content.match(/const endpoint = ['"`]([^'"`]+)['"`]/);
-        if (!endpointMatch)
+        if (!actualEndpointMatch && !endpointMatch)
             return null;
-        // Извлекаем метод
         const methodMatch = content.match(/const httpMethod = ['"`]([^'"`]+)['"`]/);
         if (!methodMatch)
             return null;
-        // Извлекаем actualEndpoint (реальный endpoint с подставленными ID)
-        const actualEndpointMatch = content.match(/const actualEndpoint = ['"`]([^'"`]+)['"`]/);
-        // Извлекаем requestData
-        let requestData = {};
-        const requestDataMatch = content.match(/const requestData = (\{[\s\S]*?\});/);
-        if (requestDataMatch) {
-            try {
-                // Пробуем распарсить как JSON-подобную структуру
-                const jsonLike = requestDataMatch[1]
-                    .replace(/'/g, '"')
-                    .replace(/(\w+):/g, '"$1":')
-                    .replace(/,\s*}/g, '}')
-                    .replace(/,\s*]/g, ']');
-                requestData = JSON.parse(jsonLike);
+        const endpoint = actualEndpointMatch ? actualEndpointMatch[1] : endpointMatch[1];
+        const method = methodMatch[1];
+        // Определяем режим: отдельный файл данных или inline
+        // Ищем импорт вида: from './test-data/xxx-data-1'
+        const dataFileImportMatch = content.match(/from ['"`](\.\/test-data\/[^'"`]+-data-\d+)['"`]/);
+        if (dataFileImportMatch) {
+            // === Режим createSeparateDataFiles: данные в отдельном файле ===
+            const relPath = dataFileImportMatch[1];
+            const dataFilePath = path.resolve(path.dirname(testFilePath), relPath + '.ts');
+            if (!fs.existsSync(dataFilePath))
+                return null;
+            const dataContent = fs.readFileSync(dataFilePath, 'utf-8');
+            let requestData = {};
+            const rdBlock = extractJsonBlock(dataContent, 'export const requestData =');
+            if (rdBlock) {
+                try {
+                    requestData = JSON.parse(rdBlock.value);
+                }
+                catch { /* оставляем {} */ }
             }
-            catch {
-                // Если не получилось, оставляем пустой объект
+            let expectedResponse = {};
+            const nerBlock = extractJsonBlock(dataContent, 'export const normalizedExpectedResponse =');
+            if (nerBlock) {
+                try {
+                    expectedResponse = JSON.parse(nerBlock.value);
+                }
+                catch { /* оставляем {} */ }
             }
+            return { endpoint, method, requestData, expectedResponse, dataFilePath };
         }
-        // Извлекаем normalizedExpected
-        let expectedResponse = {};
-        const normalizedMatch = content.match(/const normalizedExpected = (\{[\s\S]*?\});/);
-        if (normalizedMatch) {
-            try {
-                const jsonLike = normalizedMatch[1]
-                    .replace(/'/g, '"')
-                    .replace(/(\w+):/g, '"$1":')
-                    .replace(/,\s*}/g, '}')
-                    .replace(/,\s*]/g, ']');
-                expectedResponse = JSON.parse(jsonLike);
+        else {
+            // === Inline режим: данные прямо в тестовом файле ===
+            let requestData = {};
+            const rdBlock = extractJsonBlock(content, 'const requestData =');
+            if (rdBlock) {
+                try {
+                    requestData = JSON.parse(rdBlock.value);
+                }
+                catch { /* оставляем {} */ }
             }
-            catch {
-                // Если не получилось, оставляем пустой объект
+            let expectedResponse = {};
+            const neBlock = extractJsonBlock(content, 'const normalizedExpected =');
+            if (neBlock) {
+                try {
+                    expectedResponse = JSON.parse(neBlock.value);
+                }
+                catch { /* оставляем {} */ }
             }
+            return { endpoint, method, requestData, expectedResponse };
         }
-        return {
-            endpoint: actualEndpointMatch ? actualEndpointMatch[1] : endpointMatch[1],
-            method: methodMatch[1],
-            requestData,
-            expectedResponse
-        };
     }
     catch {
         return null;
@@ -2341,18 +2593,14 @@ function compareResponses(expected, actual) {
     };
 }
 /**
- * Обновляет тестовые данные в файле
+ * Заменяет JSON-значение переменной в содержимом файла.
+ * Использует extractJsonBlock для точного определения блока.
  */
-function updateTestDataInFile(content, newResponseData, testInfo) {
-    // Находим и заменяем normalizedExpected
-    const normalizedExpectedRegex = /(const normalizedExpected = )(\{[\s\S]*?\})(;)/;
-    if (normalizedExpectedRegex.test(content)) {
-        const formattedData = JSON.stringify(newResponseData, null, 4)
-            .split('\n')
-            .map((line, i) => i === 0 ? line : '    ' + line)
-            .join('\n');
-        return content.replace(normalizedExpectedRegex, `$1${formattedData}$3`);
-    }
-    return content;
+function updateJsonInContent(content, searchPrefix, newValue) {
+    const block = extractJsonBlock(content, searchPrefix);
+    if (!block)
+        return content;
+    const formattedData = JSON.stringify(newValue, null, 2);
+    return content.substring(0, block.start) + formattedData + content.substring(block.end);
 }
 //# sourceMappingURL=happy-path-generator.js.map
