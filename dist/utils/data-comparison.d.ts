@@ -68,6 +68,7 @@ export declare function convertDataTypes(data: any): any;
 export declare function deepCompareObjects(actual: any, expected: any, skipValueCheckFields?: string[], structureOnly?: boolean): {
     isEqual: boolean;
     differences: string[];
+    warnings: string[];
 };
 /**
  * Комбинированная функция для сравнения данных из БД с response
@@ -75,6 +76,7 @@ export declare function deepCompareObjects(actual: any, expected: any, skipValue
 export declare function compareDbWithResponse(dbData: any, responseData: any, skipValueCheckFields?: string[], structureOnly?: boolean): {
     isEqual: boolean;
     differences: string[];
+    warnings: string[];
     normalizedDb: any;
     normalizedResponse: any;
 };

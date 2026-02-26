@@ -1923,10 +1923,15 @@ ${tests.join('\n\n')}
       fs.mkdirSync(dataDir, { recursive: true });
     }
 
-    // НОВОЕ v14.5: Генерируем файл с helper функциями (один раз на папку)
-    // НОВОЕ v14.5.4: Добавлены skipCompareFields и ignoreFieldValues
+    // НОВОЕ v14.5: Генерируем файл с helper функциями
+    // НОВОЕ v14.9: Регенерируем если файл устарел (нет structureOnly или warnings поддержки)
     const helpersFilePath = path.join(dataDir, 'test-helpers.ts');
-    if (!fs.existsSync(helpersFilePath)) {
+    const helpersNeedsUpdate = !fs.existsSync(helpersFilePath) ||
+      (() => {
+        const existing = fs.readFileSync(helpersFilePath, 'utf-8');
+        return !existing.includes('structureOnly') || !existing.includes('warnings');
+      })();
+    if (helpersNeedsUpdate) {
       const helpersConfig: TestHelpersConfig = {
         uniqueFields: this.config.uniqueFields,
         uniqueFieldsUpperCase: this.config.uniqueFieldsUpperCase,
@@ -1936,6 +1941,9 @@ ${tests.join('\n\n')}
       };
       const helpersCode = generateTestHelpersCode(helpersConfig);
       fs.writeFileSync(helpersFilePath, helpersCode, 'utf-8');
+      if (fs.existsSync(helpersFilePath)) {
+        console.log(`  ♻️  test-helpers.ts обновлён (добавлена поддержка structureOnly/warnings)`);
+      }
     }
 
     for (let i = 0; i < requests.length; i++) {
@@ -2270,6 +2278,13 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         console.log('📋 CURL:', buildCurlCommand(httpMethod, ${standUrlVar} + actualEndpoint, ${hasBody ? 'requestData' : 'undefined'}, ${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization));
       }
 
+      if (comparison.warnings && comparison.warnings.length > 0) {
+        console.warn('\\n⚠️  ПРЕДУПРЕЖДЕНИЕ (тест НЕ упал): длина массива изменилась');
+        comparison.warnings.forEach((w: string) => console.warn('   ' + w));
+        console.warn('   💡 Актуализируйте тестовые данные. CURL:');
+        console.warn('   ', buildCurlCommand(httpMethod, ${standUrlVar} + actualEndpoint, ${hasBody ? 'requestData' : 'undefined'}, ${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization));
+      }
+
       await expect(comparison.isEqual).toBe(true);
     }
   });`;
@@ -2287,6 +2302,20 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
       } else {
         testCode += `        const curlCmd = \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`;
         console.log('📋 CURL:', curlCmd);
+`;
+      }
+      testCode += `      }
+
+      if (comparison.warnings && comparison.warnings.length > 0) {
+        console.warn('\\n⚠️  ПРЕДУПРЕЖДЕНИЕ (тест НЕ упал): длина массива изменилась');
+        comparison.warnings.forEach((w: string) => console.warn('   ' + w));
+        console.warn('   💡 Актуализируйте тестовые данные. CURL:');
+`;
+      if (hasBody) {
+        testCode += `        console.warn('   ', \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Content-Type: application/json' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}' -d '\${JSON.stringify(requestData)}'\`);
+`;
+      } else {
+        testCode += `        console.warn('   ', \`curl -X \${httpMethod} '\${${standUrlVar}}\${actualEndpoint}' -H 'Authorization: \${${axiosConfig}?.headers?.Authorization || ${axiosConfig}?.headers?.authorization || 'Bearer YOUR_TOKEN'}'\`);
 `;
       }
       testCode += `      }

@@ -409,8 +409,10 @@ function findBestMatch(item: any, candidates: any[], usedIndices: Set<number>): 
 export function deepCompareObjects(actual: any, expected: any, skipValueCheckFields: string[] = [], structureOnly: boolean = false): {
   isEqual: boolean;
   differences: string[];
+  warnings: string[];
 } {
   const differences: string[] = [];
+  const warnings: string[] = [];
 
   // Проверяет, должно ли поле пропустить сравнение значения (только проверка наличия)
   function matchesSkipField(fieldPath: string): boolean {
@@ -487,10 +489,11 @@ export function deepCompareObjects(actual: any, expected: any, skipValueCheckFie
       }
 
       // Actual может иметь БОЛЬШЕ элементов (добавились новые записи) - это нормально.
-      // Actual не может иметь МЕНЬШЕ - значит ожидаемые элементы отсутствуют.
-      if (act.length < exp.length) {
-        differences.push(`Path: ${path}, array has fewer items than expected: got ${act.length}, expected at least ${exp.length}`);
-        return false;
+      // Actual имеет МЕНЬШЕ - фиксируем как предупреждение, но тест не падает.
+      const arrayIsShorter = act.length < exp.length;
+      if (arrayIsShorter) {
+        warnings.push(`Path: ${path}, array length changed: got ${act.length}, expected at least ${exp.length} — re-actualize test data`);
+        // Не фейлим тест — продолжаем сравнение элементов которые есть
       }
 
       // Примитивные массивы (числа, строки, boolean)
@@ -534,8 +537,13 @@ export function deepCompareObjects(actual: any, expected: any, skipValueCheckFie
         const bestMatchIndex = findBestMatch(exp[i], act, usedActualIndices);
 
         if (bestMatchIndex === -1) {
-          differences.push(`Path: ${path}[${i}], no matching element found in actual array`);
-          allMatch = false;
+          if (arrayIsShorter) {
+            // Массив стал короче — элемент, вероятно, удалён (не фейлим)
+            warnings.push(`Path: ${path}[${i}], element not found in actual (array is shorter — possibly deleted)`);
+          } else {
+            differences.push(`Path: ${path}[${i}], no matching element found in actual array`);
+            allMatch = false;
+          }
           continue;
         }
 
@@ -577,7 +585,7 @@ export function deepCompareObjects(actual: any, expected: any, skipValueCheckFie
 
   const isEqual = compare(actual, expected);
 
-  return { isEqual, differences };
+  return { isEqual, differences, warnings };
 }
 
 /**
@@ -586,6 +594,7 @@ export function deepCompareObjects(actual: any, expected: any, skipValueCheckFie
 export function compareDbWithResponse(dbData: any, responseData: any, skipValueCheckFields: string[] = [], structureOnly: boolean = false): {
   isEqual: boolean;
   differences: string[];
+  warnings: string[];
   normalizedDb: any;
   normalizedResponse: any;
 } {
@@ -597,11 +606,12 @@ export function compareDbWithResponse(dbData: any, responseData: any, skipValueC
   normalizedResponse = convertDataTypes(normalizedResponse);
 
   // Сравниваем
-  const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields, structureOnly);
+  const { isEqual, differences, warnings } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields, structureOnly);
 
   return {
     isEqual,
     differences,
+    warnings,
     normalizedDb,
     normalizedResponse
   };

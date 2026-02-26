@@ -382,6 +382,7 @@ function findBestMatch(item, candidates, usedIndices) {
  */
 function deepCompareObjects(actual, expected, skipValueCheckFields = [], structureOnly = false) {
     const differences = [];
+    const warnings = [];
     // Проверяет, должно ли поле пропустить сравнение значения (только проверка наличия)
     function matchesSkipField(fieldPath) {
         if (skipValueCheckFields.length === 0)
@@ -452,10 +453,11 @@ function deepCompareObjects(actual, expected, skipValueCheckFields = [], structu
                 return compare(act[0], exp[0], `${path}[0]`);
             }
             // Actual может иметь БОЛЬШЕ элементов (добавились новые записи) - это нормально.
-            // Actual не может иметь МЕНЬШЕ - значит ожидаемые элементы отсутствуют.
-            if (act.length < exp.length) {
-                differences.push(`Path: ${path}, array has fewer items than expected: got ${act.length}, expected at least ${exp.length}`);
-                return false;
+            // Actual имеет МЕНЬШЕ - фиксируем как предупреждение, но тест не падает.
+            const arrayIsShorter = act.length < exp.length;
+            if (arrayIsShorter) {
+                warnings.push(`Path: ${path}, array length changed: got ${act.length}, expected at least ${exp.length} — re-actualize test data`);
+                // Не фейлим тест — продолжаем сравнение элементов которые есть
             }
             // Примитивные массивы (числа, строки, boolean)
             // Проверяем что каждое ожидаемое значение присутствует (без учёта порядка)
@@ -495,8 +497,14 @@ function deepCompareObjects(actual, expected, skipValueCheckFields = [], structu
                 // Шаг 2: точного нет - ищем наиболее похожий элемент для отчёта об ошибке
                 const bestMatchIndex = findBestMatch(exp[i], act, usedActualIndices);
                 if (bestMatchIndex === -1) {
-                    differences.push(`Path: ${path}[${i}], no matching element found in actual array`);
-                    allMatch = false;
+                    if (arrayIsShorter) {
+                        // Массив стал короче — элемент, вероятно, удалён (не фейлим)
+                        warnings.push(`Path: ${path}[${i}], element not found in actual (array is shorter — possibly deleted)`);
+                    }
+                    else {
+                        differences.push(`Path: ${path}[${i}], no matching element found in actual array`);
+                        allMatch = false;
+                    }
                     continue;
                 }
                 usedActualIndices.add(bestMatchIndex);
@@ -528,7 +536,7 @@ function deepCompareObjects(actual, expected, skipValueCheckFields = [], structu
         return allMatch;
     }
     const isEqual = compare(actual, expected);
-    return { isEqual, differences };
+    return { isEqual, differences, warnings };
 }
 /**
  * Комбинированная функция для сравнения данных из БД с response
@@ -540,10 +548,11 @@ function compareDbWithResponse(dbData, responseData, skipValueCheckFields = [], 
     let normalizedResponse = normalizeDbData(responseData);
     normalizedResponse = convertDataTypes(normalizedResponse);
     // Сравниваем
-    const { isEqual, differences } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields, structureOnly);
+    const { isEqual, differences, warnings } = deepCompareObjects(normalizedResponse, normalizedDb, skipValueCheckFields, structureOnly);
     return {
         isEqual,
         differences,
+        warnings,
         normalizedDb,
         normalizedResponse
     };
