@@ -4,7 +4,92 @@
 
 ---
 
-## 🎉 Что нового в v14.9.0 (Текущая)
+## 🎉 Что нового в v14.10.0 (Текущая)
+
+### v14.10.0 — Новые режимы проверки по эндпоинтам + замена значений при генерации
+
+#### Пункт 1 — `checkStructureOnlyEndpoints` и `statusOnlyEndpoints`
+
+Два новых config-параметра для автоматического выбора режима проверки на основе паттерна URL:
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `checkStructureOnlyEndpoints` | `string[]` | Паттерны эндпоинтов где тест автоматически ставит `checkStructureOnlySingle = true` |
+| `statusOnlyEndpoints` | `string[]` | Паттерны эндпоинтов где тест проверяет **только HTTP 200 + непустой ответ** (сравнение данных пропускается) |
+
+```typescript
+const generator = new HappyPathTestGenerator(sql, {
+  checkStructureOnlyEndpoints: ['search', 'filter', 'list'],   // авто-structureOnly
+  statusOnlyEndpoints: ['report', 'export', 'download'],       // только статус
+});
+```
+
+**`checkStructureOnlyEndpoints`:** если URL эндпоинта содержит любой из паттернов (case-insensitive), генератор ставит `checkStructureOnlySingle = true` — проверяются только наличие полей и типы, но не значения.
+
+**`statusOnlyEndpoints`:** если URL содержит паттерн — тест генерируется без блока сравнения данных:
+```typescript
+// statusOnly режим: проверяем только статус и непустой ответ
+await expect(response.status, 'Ожидался успешный статус (2xx)').toBeLessThan(300);
+await expect(response.data !== null && response.data !== undefined, 'Ответ не должен быть пустым').toBe(true);
+```
+
+---
+
+#### Пункт 4 — `replaceValues`: замена значений при генерации
+
+Список значений которые **обязательно заменяются** во всех request body и response при генерации тестов. Старые значения (например тестовые префиксы из БД) заменяются на случайно сгенерированные, сохраняя формат и регистр.
+
+| Параметр | Тип | Описание |
+|---|---|---|
+| `replaceValues` | `string[]` | Значения которые заменяются во всех данных при генерации |
+
+```typescript
+const generator = new HappyPathTestGenerator(sql, {
+  replaceValues: ['TEST_ORDER', 'AQA_ORDER', 'AQA_USER'],
+});
+```
+
+Генератор вызывает `generateSmartUniqueValue` для каждого значения — замена происходит при записи в файл теста (и в файл данных при `createSeparateDataFiles: true`).
+
+---
+
+#### Пункт 5 — `enableGeneratedSuffix` / `generatedSuffix`: суффикс к сгенерированным значениям
+
+Суффикс добавляется к каждому значению сгенерированному через `replaceValues`. Удобно для идентификации тестовых данных в БД и последующей очистки.
+
+| Параметр | Тип | По умолчанию | Описание |
+|---|---|---|---|
+| `enableGeneratedSuffix` | `boolean` | `false` | Включить суффикс |
+| `generatedSuffix` | `string` | `''` | Суффикс (например `'_GENDT'`) |
+
+```typescript
+const generator = new HappyPathTestGenerator(sql, {
+  replaceValues: ['TEST_ORDER'],
+  enableGeneratedSuffix: true,
+  generatedSuffix: '_GENDT',
+  // Результат: TEST_ORDER → DJSKLFXC_GENDT
+});
+```
+
+---
+
+### v14.9.1 — Исправления: длина массива и checkStructureOnly
+
+#### Пункт 2 — Исправление `checkStructureOnly` (не работало ни в одном тесте)
+
+**Причина:** старый `test-helpers.ts` в проекте пользователя не содержал параметр `structureOnly` — функция `compareWithoutUniqueFields` не принимала его и игнорировала.
+
+**Решение:** генератор теперь проверяет содержимое существующего `test-helpers.ts`. Если в нём нет `structureOnly` или `warnings` — файл автоматически перегенерируется с актуальной версией.
+
+#### Пункт 3 — Длина массива: предупреждение вместо падения
+
+**Проблема:** если в ответе массив короче чем в ожидаемых данных — тест падал с ошибкой.
+
+**Решение:** `deepCompareObjects` теперь возвращает `{ isEqual, differences, warnings }`. Если массив стал короче — это попадает в `warnings[]` (не в `differences[]`), тест не падает, но предупреждение выводится. `isEqual` зависит только от `differences.length`.
+
+---
+
+## Что нового в v14.9.0
 
 ### v14.9.0 — Исправление reActualizeHappyPathTests
 

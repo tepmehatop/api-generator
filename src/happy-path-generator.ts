@@ -555,6 +555,45 @@ export interface HappyPathTestConfig {
    */
   ignoreFieldValues?: string[];
 
+  /**
+   * НОВОЕ v14.10: Эндпоинты для которых проверяется только СТРУКТУРА ответа
+   * Поиск по подстроке: 'search' матчит '/api/v1/orders/search'
+   * Для таких эндпоинтов checkStructureOnlySingle = true по умолчанию
+   * @example ['search', 'filter', 'list']
+   */
+  checkStructureOnlyEndpoints?: string[];
+
+  /**
+   * НОВОЕ v14.10: Эндпоинты для которых проверяется только статус 200 + непустой ответ
+   * Поиск по подстроке: 'report' матчит '/api/v1/reports/monthly'
+   * Для таких эндпоинтов сравнение данных НЕ производится вообще
+   * @example ['report', 'export', 'download']
+   */
+  statusOnlyEndpoints?: string[];
+
+  /**
+   * НОВОЕ v14.10: Значения которые ОБЯЗАТЕЛЬНО заменяются при генерации тестов
+   * Если эти значения встречаются в request или response из БД — они заменяются
+   * на случайно сгенерированные значения с сохранением регистра/формата
+   * Пример: ['TEST_ORDER', 'AQA_ORDER'] → 'DJSKLFXC', 'XKZPQWNM'
+   * @example ['TEST_ORDER', 'AQA_ORDER', 'AQA_USER']
+   */
+  replaceValues?: string[];
+
+  /**
+   * НОВОЕ v14.10: Включить суффикс для всех сгенерированных значений
+   * Суффикс добавляется к значениям из replaceValues при замене
+   * @default false
+   */
+  enableGeneratedSuffix?: boolean;
+
+  /**
+   * НОВОЕ v14.10: Суффикс который добавляется к сгенерированным значениям
+   * Работает только если enableGeneratedSuffix = true
+   * @example '_GENDT' → 'DJSKLFXC_GENDT'
+   */
+  generatedSuffix?: string;
+
   // ═══════════════════════════════════════════════════════════════════════════
   // НОВОЕ v14.3: ТЕСТЫ НА ВАЛИДАЦИЮ (422 ОШИБКИ)
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1085,6 +1124,13 @@ export class HappyPathTestGenerator {
       // НОВОЕ v14.5.4: Управление сравнением полей в response
       skipCompareFields: ['id', 'created_at', 'updated_at', 'createdAt', 'updatedAt'],
       ignoreFieldValues: [],
+      // НОВОЕ v14.10: Паттерны эндпоинтов для автоматического режима проверки
+      checkStructureOnlyEndpoints: [],
+      statusOnlyEndpoints: [],
+      // НОВОЕ v14.10: Замена значений при генерации
+      replaceValues: [],
+      enableGeneratedSuffix: false,
+      generatedSuffix: '',
       ...config,
 
       // НОВОЕ v12.0: Дефолтные настройки дедупликации
@@ -1970,6 +2016,13 @@ ${tests.join('\n\n')}
         }
       }
 
+      // НОВОЕ v14.10: Apply replaceValues if configured
+      if ((this.config.replaceValues || []).length > 0) {
+        const valueMap = this.buildReplaceValueMap();
+        requestBodyForExport = this.replaceValuesInData(requestBodyForExport, valueMap);
+        normalizedResponse = this.replaceValuesInData(normalizedResponse, valueMap);
+      }
+
       const dataContent = `/**
  * Тестовые данные для ${method} ${endpoint}
  * DB ID: ${request.id}
@@ -2004,6 +2057,12 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     const standUrlVar = `process.env.${this.config.standUrlEnvVar}`;
     const axiosConfig = this.config.axiosConfigName;
 
+    // НОВОЕ v14.10: Определяем режим проверки на основе паттернов эндпоинта
+    const isStructureOnlyEndpoint = (this.config.checkStructureOnlyEndpoints || [])
+      .some(pattern => endpoint.toLowerCase().includes(pattern.toLowerCase()));
+    const isStatusOnlyEndpoint = (this.config.statusOnlyEndpoints || [])
+      .some(pattern => endpoint.toLowerCase().includes(pattern.toLowerCase()));
+
     let testCode = `  test(\`\${httpMethod} ${testName} (\${success}) @api ${this.config.testTag}\`, async ({ page }, testInfo) => {
     // DB ID: db-id-${request.id}
     // ИСПРАВЛЕНИЕ 12: Реальный endpoint с подставленными параметрами пути
@@ -2013,7 +2072,7 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     const skipCheckFieldsSingle: string[] = [];
     const skipCheckFields = [...skipCheckFieldsGlobal, ...skipCheckFieldsSingle];
     // НОВОЕ v14.8: Проверять только СТРУКТУРУ ответа (поля и типы), но не значения (только для этого теста)
-    const checkStructureOnlySingle = false;
+    const checkStructureOnlySingle = ${isStructureOnlyEndpoint ? 'true' : 'false'};
     const checkStructureOnly = checkStructureOnlyGlobal || checkStructureOnlySingle;
 `;
 
@@ -2039,6 +2098,11 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
             // Если парсинг не удался - оставляем как есть
           }
         }
+        // НОВОЕ v14.10: Apply replaceValues if configured (inline mode)
+        if ((this.config.replaceValues || []).length > 0) {
+          const valueMap = this.buildReplaceValueMap();
+          requestBodyObj = this.replaceValuesInData(requestBodyObj, valueMap);
+        }
         testCode += `    const requestData = ${JSON.stringify(requestBodyObj, null, 4).replace(/^/gm, '    ')};
 
 `;
@@ -2052,8 +2116,14 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
         normalizedResponse = normalizeDbData(request.response_body);
       }
 
+      // НОВОЕ v14.10: Apply replaceValues if configured (inline mode)
+      if ((this.config.replaceValues || []).length > 0) {
+        const valueMap = this.buildReplaceValueMap();
+        normalizedResponse = this.replaceValuesInData(normalizedResponse, valueMap);
+      }
+
       testCode += `    const normalizedExpected = ${JSON.stringify(normalizedResponse, null, 4).replace(/^/gm, '    ')};
-    
+
 `;
     }
 
@@ -2185,6 +2255,14 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     // НОВОЕ v14.1: При несовпадении выводим endpoint, метод и CURL для повторения
     // НОВОЕ v14.1: Пропускаем сравнение если ожидаемый response пустой (null, undefined, "")
     // НОВОЕ v14.2: Отдельная проверка уникальных полей + исключение их из основного сравнения
+    // НОВОЕ v14.10: statusOnly режим — только статус и непустой ответ, без сравнения данных
+    if (isStatusOnlyEndpoint) {
+      testCode += `
+    // statusOnly режим: проверяем только статус и непустой ответ (сравнение данных пропущено)
+    await expect(response.status, 'Ожидался успешный статус (2xx)').toBeLessThan(300);
+    await expect(response.data !== null && response.data !== undefined, 'Ответ не должен быть пустым').toBe(true);
+  });`;
+    } else {
     testCode += `
     // Проверка на пустой ожидаемый response - пропускаем сравнение данных
     const isEmptyExpected = normalizedExpected === null ||
@@ -2324,8 +2402,45 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
     }
   });`;
     }
+    } // end else (!isStatusOnlyEndpoint)
 
     return testCode;
+  }
+
+  private replaceValuesInData(data: any, valueMap: Map<string, string>): any {
+    if (typeof data === 'string') {
+      for (const [original, replacement] of valueMap.entries()) {
+        if (data.toUpperCase().includes(original.toUpperCase())) {
+          return replacement;
+        }
+      }
+      return data;
+    }
+    if (Array.isArray(data)) {
+      return data.map(item => this.replaceValuesInData(item, valueMap));
+    }
+    if (typeof data === 'object' && data !== null) {
+      const result: any = {};
+      for (const key of Object.keys(data)) {
+        result[key] = this.replaceValuesInData(data[key], valueMap);
+      }
+      return result;
+    }
+    return data;
+  }
+
+  private buildReplaceValueMap(): Map<string, string> {
+    const map = new Map<string, string>();
+    const replaceValues = this.config.replaceValues || [];
+    if (replaceValues.length === 0) return map;
+
+    const suffix = this.config.enableGeneratedSuffix ? (this.config.generatedSuffix || '') : '';
+
+    for (const original of replaceValues) {
+      const generated = generateSmartUniqueValue(original, { fieldName: original });
+      map.set(original, generated + suffix);
+    }
+    return map;
   }
 
   private getJsType(tsType: string): string | null {
