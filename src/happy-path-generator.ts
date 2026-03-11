@@ -2129,7 +2129,9 @@ export const normalizedExpectedResponse = ${JSON.stringify(normalizedResponse, n
 
     // НОВОЕ v14.2: Генерация уникальных значений для полей (избегаем 400 "Уже существует")
     // НОВОЕ v14.5: Используем helper функцию вместо inline кода
-    const useUniqueFields = hasBody && this.config.enableUniqueFieldGeneration && this.config.uniqueFields.length > 0;
+    // НОВОЕ v14.10.1: Для эндпоинтов из checkStructureOnlyEndpoints НЕ рандомизируем уникальные поля —
+    // поисковые/фильтрующие эндпоинты ищут по конкретным значениям из БД, замена сломает поиск
+    const useUniqueFields = hasBody && this.config.enableUniqueFieldGeneration && this.config.uniqueFields.length > 0 && !isStructureOnlyEndpoint;
     const useSeparateDataFiles = this.config.createSeparateDataFiles;
 
     if (useUniqueFields) {
